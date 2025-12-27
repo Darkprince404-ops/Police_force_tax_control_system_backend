@@ -49,10 +49,20 @@ router.post('/preview', requireAuth, async (req, res, next) => {
       throw createError(400, 'File not found for this import');
     }
     
+    console.log('Preview request - Import ID:', value.importId);
+    console.log('File path:', job.filename);
+    
     const preview = parsePreview(job.filename);
+    console.log('Preview generated successfully - Rows:', preview.totalRows);
+    
     res.json({ importId: job.id, ...preview });
   } catch (err) {
     console.error('Preview error:', err);
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      importId: req.body?.importId,
+    });
     next(err);
   }
 });

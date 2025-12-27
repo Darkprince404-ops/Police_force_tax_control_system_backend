@@ -50,26 +50,41 @@ const parseFile = (filePath) => {
       throw new Error(`File not found: ${filePath}`);
     }
 
-    const ext = filePath.toLowerCase().split('.').pop();
-    
+    // xlsx library can handle both CSV and Excel files with readFile
     let workbook;
-    if (ext === 'csv') {
-      // For CSV files, read as text first, then parse
-      const content = fs.readFileSync(filePath, 'utf-8');
-      workbook = xlsx.read(content, { type: 'string', raw: false });
-    } else {
-      // For Excel files (.xlsx, .xls)
+    try {
       workbook = xlsx.readFile(filePath);
+    } catch (readError) {
+      // If readFile fails, try reading CSV as text
+      const ext = filePath.toLowerCase().split('.').pop();
+      if (ext === 'csv') {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        workbook = xlsx.read(content, { type: 'string' });
+      } else {
+        throw readError;
+      }
     }
     
-    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
       throw new Error('No sheets found in file');
     }
     
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!sheet) {
+      throw new Error('Sheet is empty or invalid');
+    }
+    
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    
+    if (!rows || rows.length === 0) {
+      throw new Error('File contains no data');
+    }
+    
+    return rows;
   } catch (error) {
     console.error('Error parsing file:', error);
+    console.error('File path:', filePath);
+    console.error('Error stack:', error.stack);
     throw new Error(`Failed to parse file: ${error.message}`);
   }
 };
