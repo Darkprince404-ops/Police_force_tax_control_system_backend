@@ -55,23 +55,46 @@ const parseFile = (filePath) => {
     try {
       workbook = xlsx.readFile(filePath);
     } catch (readError) {
+      // Check if it's a password-protected file error
+      const errorMsg = readError.message?.toLowerCase() || '';
+      const errorStack = readError.stack?.toLowerCase() || '';
+      
+      if (
+        errorMsg.includes('password') ||
+        errorMsg.includes('encrypted') ||
+        errorMsg.includes('protected') ||
+        errorStack.includes('password') ||
+        errorStack.includes('encrypted') ||
+        readError.code === 'ENOENT' ||
+        readError.message?.includes('Cannot read')
+      ) {
+        throw new Error(
+          'This Excel file is password-protected. Please remove the password protection before uploading. ' +
+          'To remove password: Open the file in Excel → File → Info → Protect Workbook → Remove password, then save and upload again.'
+        );
+      }
+      
       // If readFile fails, try reading CSV as text
       const ext = filePath.toLowerCase().split('.').pop();
       if (ext === 'csv') {
         const content = fs.readFileSync(filePath, 'utf-8');
         workbook = xlsx.read(content, { type: 'string' });
       } else {
-        throw readError;
+        // Provide more helpful error message
+        throw new Error(
+          `Cannot read file. The file may be password-protected, corrupted, or in an unsupported format. ` +
+          `Original error: ${readError.message}`
+        );
       }
     }
     
     if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
-      throw new Error('No sheets found in file');
+      throw new Error('No sheets found in file. The file may be password-protected or empty.');
     }
     
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     if (!sheet) {
-      throw new Error('Sheet is empty or invalid');
+      throw new Error('Sheet is empty or invalid. The file may be password-protected.');
     }
     
     const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
@@ -85,6 +108,12 @@ const parseFile = (filePath) => {
     console.error('Error parsing file:', error);
     console.error('File path:', filePath);
     console.error('Error stack:', error.stack);
+    
+    // If it's already our custom error, throw it as-is
+    if (error.message.includes('password-protected') || error.message.includes('Cannot read file')) {
+      throw error;
+    }
+    
     throw new Error(`Failed to parse file: ${error.message}`);
   }
 };
