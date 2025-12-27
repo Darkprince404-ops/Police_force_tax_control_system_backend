@@ -44,52 +44,84 @@ const autoDetectMapping = (headers) => {
 };
 
 const parseFile = (filePath) => {
-  const ext = filePath.toLowerCase().split('.').pop();
-  
-  if (ext === 'csv') {
-    // For CSV files, read as text and parse
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const workbook = xlsx.read(content, { type: 'string' });
+  try {
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+
+    const ext = filePath.toLowerCase().split('.').pop();
+    
+    let workbook;
+    if (ext === 'csv') {
+      // For CSV files, read as text first, then parse
+      const content = fs.readFileSync(filePath, 'utf-8');
+      workbook = xlsx.read(content, { type: 'string', raw: false });
+    } else {
+      // For Excel files (.xlsx, .xls)
+      workbook = xlsx.readFile(filePath);
+    }
+    
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      throw new Error('No sheets found in file');
+    }
+    
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return xlsx.utils.sheet_to_json(sheet, { header: 1 });
-  } else {
-    // For Excel files
-    const workbook = xlsx.readFile(filePath);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return xlsx.utils.sheet_to_json(sheet, { header: 1 });
+    return xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  } catch (error) {
+    console.error('Error parsing file:', error);
+    throw new Error(`Failed to parse file: ${error.message}`);
   }
 };
 
 export const parsePreview = (filePath) => {
-  const rows = parseFile(filePath);
-  const headers = (rows[0] || []).map((h) => String(h).trim());
-  const dataRows = rows.slice(1, 21).map((row) => {
-    const obj = {};
-    headers.forEach((h, idx) => {
-      obj[h] = row[idx] ?? '';
+  try {
+    const rows = parseFile(filePath);
+    
+    if (!rows || rows.length === 0) {
+      throw new Error('File is empty or could not be parsed');
+    }
+
+    const headers = (rows[0] || []).map((h) => String(h || '').trim()).filter(h => h !== '');
+    
+    if (headers.length === 0) {
+      throw new Error('No headers found in file');
+    }
+
+    const dataRows = rows.slice(1, 21).map((row) => {
+      const obj = {};
+      headers.forEach((h, idx) => {
+        obj[h] = row[idx] ?? '';
+      });
+      return obj;
     });
-    return obj;
-  });
-  
-  // Auto-detect mapping
-  const autoMapping = autoDetectMapping(headers);
-  
-  // Get all rows for preview (not just first 20)
-  const allRows = rows.slice(1).map((row) => {
-    const obj = {};
-    headers.forEach((h, idx) => {
-      obj[h] = row[idx] ?? '';
+    
+    // Auto-detect mapping
+    const autoMapping = autoDetectMapping(headers);
+    
+    // Get all rows for preview (not just first 20)
+    const allRows = rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((h, idx) => {
+        obj[h] = row[idx] ?? '';
+      });
+      return obj;
+    }).filter(row => {
+      // Filter out completely empty rows
+      return Object.values(row).some(val => val !== '' && val !== null && val !== undefined);
     });
-    return obj;
-  });
-  
-  return { 
-    headers, 
-    sampleRows: dataRows,
-    allRows: allRows.slice(0, 50), // First 50 rows for preview
-    autoMapping,
-    totalRows: allRows.length,
-  };
+    
+    return { 
+      headers, 
+      sampleRows: dataRows,
+      allRows: allRows.slice(0, 50), // First 50 rows for preview
+      autoMapping,
+      totalRows: allRows.length,
+    };
+  } catch (error) {
+    console.error('Error in parsePreview:', error);
+    throw error;
+  }
 };
 
 const findDuplicateBusiness = async (taxId, name, address) => {

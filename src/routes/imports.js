@@ -41,11 +41,18 @@ router.post('/preview', requireAuth, async (req, res, next) => {
   try {
     const { error, value } = previewSchema.validate(req.body);
     if (error) throw createError(400, error.message);
+    
     const job = await ImportJobModel.findById(value.importId);
     if (!job) throw createError(404, 'Import not found');
+    
+    if (!job.filename) {
+      throw createError(400, 'File not found for this import');
+    }
+    
     const preview = parsePreview(job.filename);
     res.json({ importId: job.id, ...preview });
   } catch (err) {
+    console.error('Preview error:', err);
     next(err);
   }
 });
