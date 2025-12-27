@@ -52,12 +52,19 @@ const parseFile = (filePath) => {
 
     // xlsx library can handle both CSV and Excel files with readFile
     let workbook;
+    const ext = filePath.toLowerCase().split('.').pop();
+    
     try {
-      workbook = xlsx.readFile(filePath);
+      // Try reading as Excel file first
+      workbook = xlsx.readFile(filePath, { cellDates: false, cellNF: false, cellText: false });
     } catch (readError) {
+      console.error('xlsx.readFile error:', readError);
+      console.error('Error message:', readError.message);
+      console.error('Error code:', readError.code);
+      
       // Check if it's a password-protected file error
-      const errorMsg = readError.message?.toLowerCase() || '';
-      const errorStack = readError.stack?.toLowerCase() || '';
+      const errorMsg = (readError.message || '').toLowerCase();
+      const errorStack = (readError.stack || '').toLowerCase();
       
       if (
         errorMsg.includes('password') ||
@@ -65,8 +72,9 @@ const parseFile = (filePath) => {
         errorMsg.includes('protected') ||
         errorStack.includes('password') ||
         errorStack.includes('encrypted') ||
-        readError.code === 'ENOENT' ||
-        readError.message?.includes('Cannot read')
+        readError.message?.includes('Cannot read') ||
+        readError.message?.includes('bad password') ||
+        readError.message?.includes('encrypted')
       ) {
         throw new Error(
           'This Excel file is password-protected. Please remove the password protection before uploading. ' +
@@ -75,15 +83,24 @@ const parseFile = (filePath) => {
       }
       
       // If readFile fails, try reading CSV as text
-      const ext = filePath.toLowerCase().split('.').pop();
       if (ext === 'csv') {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        workbook = xlsx.read(content, { type: 'string' });
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          workbook = xlsx.read(content, { type: 'string' });
+        } catch (csvError) {
+          console.error('CSV read error:', csvError);
+          throw new Error(
+            `Cannot read CSV file. The file may be corrupted or in an unsupported format. ` +
+            `Error: ${csvError.message}`
+          );
+        }
       } else {
-        // Provide more helpful error message
+        // Provide more helpful error message for Excel files
+        const errorDetails = readError.message || 'Unknown error';
         throw new Error(
-          `Cannot read file. The file may be password-protected, corrupted, or in an unsupported format. ` +
-          `Original error: ${readError.message}`
+          `Cannot read Excel file. The file may be password-protected, corrupted, or in an unsupported format. ` +
+          `Please ensure the file is not password-protected and is a valid .xlsx or .xls file. ` +
+          `Error: ${errorDetails}`
         );
       }
     }
@@ -120,40 +137,60 @@ const parseFile = (filePath) => {
 
 export const parsePreview = (filePath) => {
   try {
+    if (!filePath) {
+      throw new Error('File path is required');
+    }
+
     const rows = parseFile(filePath);
     
-    if (!rows || rows.length === 0) {
-      throw new Error('File is empty or could not be parsed');
+    if (!rows || !Array.isArray(rows) || rows.length === 0) {
+      throw new Error('File is empty or could not be parsed. Please check the file format.');
     }
 
-    const headers = (rows[0] || []).map((h) => String(h || '').trim()).filter(h => h !== '');
+    // Get headers from first row
+    const firstRow = rows[0] || [];
+    const headers = firstRow
+      .map((h) => {
+        const header = String(h || '').trim();
+        return header;
+      })
+      .filter(h => h !== '' && h !== null && h !== undefined);
     
     if (headers.length === 0) {
-      throw new Error('No headers found in file');
+      throw new Error('No headers found in file. Please ensure the first row contains column names.');
     }
 
-    const dataRows = rows.slice(1, 21).map((row) => {
-      const obj = {};
-      headers.forEach((h, idx) => {
-        obj[h] = row[idx] ?? '';
+    // Create sample rows (first 20 data rows)
+    const dataRows = rows.slice(1, 21)
+      .filter(row => row && Array.isArray(row))
+      .map((row) => {
+        const obj = {};
+        headers.forEach((h, idx) => {
+          obj[h] = row[idx] ?? '';
+        });
+        return obj;
       });
-      return obj;
-    });
     
     // Auto-detect mapping
     const autoMapping = autoDetectMapping(headers);
     
     // Get all rows for preview (not just first 20)
-    const allRows = rows.slice(1).map((row) => {
-      const obj = {};
-      headers.forEach((h, idx) => {
-        obj[h] = row[idx] ?? '';
+    const allRows = rows.slice(1)
+      .filter(row => row && Array.isArray(row))
+      .map((row) => {
+        const obj = {};
+        headers.forEach((h, idx) => {
+          obj[h] = row[idx] ?? '';
+        });
+        return obj;
+      })
+      .filter(row => {
+        // Filter out completely empty rows
+        return Object.values(row).some(val => {
+          const valStr = String(val || '').trim();
+          return valStr !== '' && valStr !== 'null' && valStr !== 'undefined';
+        });
       });
-      return obj;
-    }).filter(row => {
-      // Filter out completely empty rows
-      return Object.values(row).some(val => val !== '' && val !== null && val !== undefined);
-    });
     
     return { 
       headers, 
@@ -164,7 +201,14 @@ export const parsePreview = (filePath) => {
     };
   } catch (error) {
     console.error('Error in parsePreview:', error);
-    throw error;
+    console.error('File path:', filePath);
+    console.error('Error stack:', error.stack);
+    
+    // Re-throw with a user-friendly message if it's not already an Error object
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to parse preview: ${String(error)}`);
   }
 };
 

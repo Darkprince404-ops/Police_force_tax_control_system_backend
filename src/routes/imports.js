@@ -53,20 +53,38 @@ const previewSchema = Joi.object({
 router.post('/preview', requireAuth, async (req, res, next) => {
   try {
     const { error, value } = previewSchema.validate(req.body);
-    if (error) throw createError(400, error.message);
+    if (error) {
+      console.error('Validation error:', error.message);
+      return next(createError(400, error.message));
+    }
     
     const job = await ImportJobModel.findById(value.importId);
-    if (!job) throw createError(404, 'Import not found');
+    if (!job) {
+      console.error('Import job not found:', value.importId);
+      return next(createError(404, 'Import not found'));
+    }
     
     if (!job.filename) {
-      throw createError(400, 'File not found for this import');
+      console.error('No filename in import job:', job.id);
+      return next(createError(400, 'File not found for this import'));
     }
     
     console.log('Preview request - Import ID:', value.importId);
     console.log('File path:', job.filename);
+    console.log('File exists:', fs.existsSync(job.filename));
     
-    const preview = parsePreview(job.filename);
-    console.log('Preview generated successfully - Rows:', preview.totalRows);
+    let preview;
+    try {
+      preview = parsePreview(job.filename);
+      console.log('Preview generated successfully - Rows:', preview.totalRows);
+    } catch (parseError) {
+      console.error('Parse error:', parseError);
+      console.error('Parse error stack:', parseError.stack);
+      
+      // Return user-friendly error message
+      const errorMessage = parseError.message || 'Failed to parse file';
+      return next(createError(400, errorMessage));
+    }
     
     res.json({ importId: job.id, ...preview });
   } catch (err) {
@@ -75,8 +93,16 @@ router.post('/preview', requireAuth, async (req, res, next) => {
       message: err.message,
       stack: err.stack,
       importId: req.body?.importId,
+      status: err.status || err.statusCode,
     });
-    next(err);
+    
+    // If it's already an HTTP error, pass it through
+    if (err.status || err.statusCode) {
+      return next(err);
+    }
+    
+    // Otherwise, wrap it as a 500 error
+    return next(createError(500, err.message || 'Internal server error'));
   }
 });
 
