@@ -221,9 +221,18 @@ router.post('/', requireAuth, requireRole(['admin']), async (req, res, next) => 
     const { error, value } = createUserSchema.validate(req.body);
     if (error) throw createError(400, error.message);
 
-    // Check if email already exists
-    const existing = await UserModel.findOne({ email: value.email.toLowerCase() });
-    if (existing) throw createError(400, 'Email already exists');
+    // Check if email already exists (case-insensitive)
+    const existing = await UserModel.findOne({ 
+      email: { $regex: new RegExp(`^${value.email.toLowerCase()}$`, 'i') }
+    });
+    if (existing) {
+      console.log('Email conflict found:', { 
+        existingId: existing._id, 
+        existingEmail: existing.email,
+        requestedEmail: value.email.toLowerCase()
+      });
+      throw createError(400, 'Email already exists');
+    }
 
     // Validate supervisor_id if provided
     if (value.supervisor_id) {
@@ -235,14 +244,24 @@ router.post('/', requireAuth, requireRole(['admin']), async (req, res, next) => 
 
     const passwordHash = await bcrypt.hash(value.password, 10);
 
-    const user = await UserModel.create({
-      email: value.email.toLowerCase(),
-      name: value.name,
-      passwordHash,
-      role: value.role,
-      status: value.status || 'active',
-      supervisor_id: value.supervisor_id || null,
-    });
+    let user;
+    try {
+      user = await UserModel.create({
+        email: value.email.toLowerCase(),
+        name: value.name,
+        passwordHash,
+        role: value.role,
+        status: value.status || 'active',
+        supervisor_id: value.supervisor_id || null,
+      });
+    } catch (dbError) {
+      // Handle MongoDB duplicate key error
+      if (dbError.code === 11000 || dbError.name === 'MongoServerError') {
+        console.error('MongoDB duplicate key error:', dbError);
+        throw createError(400, 'Email already exists in database');
+      }
+      throw dbError;
+    }
 
     await recordAudit({
       action: 'create',
@@ -257,6 +276,12 @@ router.post('/', requireAuth, requireRole(['admin']), async (req, res, next) => 
       .populate('supervisor_id', 'name email role');
     res.status(201).json(userResponse);
   } catch (err) {
+    // If it's already an HTTP error, pass it through
+    if (err.status || err.statusCode) {
+      return next(err);
+    }
+    // Otherwise, wrap it
+    console.error('Create user error:', err);
     next(err);
   }
 });
