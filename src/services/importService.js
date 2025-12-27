@@ -9,34 +9,66 @@ import { generateBusinessId } from '../utils/businessId.js';
 
 const normalize = (val) => (val || '').trim().toLowerCase();
 
-// Auto-detect Somali headers and map them to English field names
+// Normalize header for case-insensitive matching
+const normalizeHeader = (header) => String(header || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+// Header variations mapping - all variations map to field names
+const headerVariations = {
+  owner_name: [
+    'magaca shaqsiga', 'magaca shaqoiga', 'magaca shaqsiga', 
+    'name of incharge', 'name of owner', 'the name of the incharge or the owner',
+    'owner name', 'owner', 'incharge', 'name of the owner', 'name of the incharge'
+  ],
+  business_name: [
+    'magaca ganacsiga', 'business name', 'ganacsiga', 'business', 'company name', 'company'
+  ],
+  tax_id: [
+    'xiiska', 'tax id', 'tax_id', 'tax number', 'tin'
+  ],
+  fined_amount: [
+    'account', 'account ka', 'fine', 'fined amount', 'fined_amount', 'amount', 'penalty'
+  ],
+  contact_phone: [
+    'number', 'their number', 'phone', 'contact number', 'contact_phone', 'telephone', 'mobile', 'phone number'
+  ],
+  district: [
+    'district', 'degmada', 'area', 'region'
+  ],
+  department: [
+    'department', 'waaxda', 'dept', 'section'
+  ],
+  title: [
+    'title', 'position', 'role'
+  ],
+  case_field: [
+    'case', 'case type', 'case_type', 'case description', 'violation', 'offense'
+  ],
+  case_date: [
+    'date this case was registered', 'case date', 'registration date', 'date registered',
+    'date', 'registered date', 'case registration date'
+  ],
+  address: [
+    'address', 'location', 'place'
+  ],
+  contact_email: [
+    'email', 'contact email', 'contact_email', 'e-mail'
+  ],
+};
+
+// Auto-detect headers and map them to English field names (case-insensitive)
 const autoDetectMapping = (headers) => {
   const mapping = {};
-  const headerMap = {
-    // Somali headers → English field names
-    'MAGACA SHAQOIGA': 'owner_name',
-    'MAGACA GANACSIGA': 'business_name',
-    'XIISKA': 'tax_id',
-    'ACCOUNT KA': 'fined_amount', // Map ACCOUNT KA to fined_amount
-    'NUMBER': 'contact_phone',
-    'DEGMADA': 'district',
-    'WAAXDA': 'department',
-    'TITLE': 'title',
-    // English headers (fallback)
-    'business_name': 'business_name',
-    'owner_name': 'owner_name',
-    'tax_id': 'tax_id',
-    'contact_phone': 'contact_phone',
-    'address': 'address',
-    'contact_email': 'contact_email',
-    'fined_amount': 'fined_amount',
-  };
-
+  
   headers.forEach((header) => {
-    const normalizedHeader = String(header).trim();
-    const mappedField = headerMap[normalizedHeader];
-    if (mappedField) {
-      mapping[mappedField] = normalizedHeader;
+    const originalHeader = String(header).trim();
+    const normalizedHeader = normalizeHeader(header);
+    
+    // Check each field's variations
+    for (const [fieldName, variations] of Object.entries(headerVariations)) {
+      if (variations.some(v => normalizeHeader(v) === normalizedHeader)) {
+        mapping[fieldName] = originalHeader;
+        break;
+      }
     }
   });
 
@@ -226,6 +258,46 @@ const findDuplicateBusiness = async (taxId, name, address) => {
   return null;
 };
 
+// Extract case type from case field value
+const extractCaseType = (caseValue) => {
+  if (!caseValue) return { type: 'OTHER', description: '' };
+  
+  const caseStr = String(caseValue).trim();
+  const upperCaseStr = caseStr.toUpperCase();
+  
+  // Check for known case types
+  if (upperCaseStr.includes('TCC')) return { type: 'TCC', description: caseStr };
+  if (upperCaseStr.includes('EVC')) return { type: 'EVC', description: caseStr };
+  
+  // Default to OTHER with the full value as description
+  return { type: 'OTHER', description: caseStr };
+};
+
+// Parse date from various formats
+const parseDate = (dateValue) => {
+  if (!dateValue) return null;
+  
+  // If already a Date object
+  if (dateValue instanceof Date) return dateValue;
+  
+  // Try parsing string date
+  const dateStr = String(dateValue).trim();
+  if (!dateStr) return null;
+  
+  // Try standard parsing
+  const parsed = new Date(dateStr);
+  if (!isNaN(parsed.getTime())) return parsed;
+  
+  // Try DD/MM/YYYY format
+  const ddmmyyyy = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (ddmmyyyy) {
+    const [, day, month, year] = ddmmyyyy;
+    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+  }
+  
+  return null;
+};
+
 export const processImport = async (
   filePath,
   mapping,
@@ -262,15 +334,25 @@ export const processImport = async (
         const district = toObj('district');
         const address = toObj('address') || district || '';
         
+        // Handle title - prepend to owner_name if available
+        let ownerName = toObj('owner_name');
+        const title = toObj('title');
+        if (title && ownerName) {
+          ownerName = `${String(title).trim()}: ${String(ownerName).trim()}`;
+        } else if (title && !ownerName) {
+          ownerName = String(title).trim();
+        }
+        
         const businessPayload = {
           business_name: String(toObj('business_name') || '').trim(),
-          owner_name: toObj('owner_name'),
+          owner_name: ownerName,
           address: address,
           contact_phone: toObj('contact_phone'),
           contact_email: toObj('contact_email'),
           business_type: toObj('business_type') || toObj('department'), // Use department as business_type if available
           tax_id: toObj('tax_id'),
           registration_number: toObj('registration_number'),
+          district: district,
         };
         if (!businessPayload.business_name) throw new Error('business_name is required');
 
@@ -303,28 +385,34 @@ export const processImport = async (
           summary.createdBusinesses += 1;
         }
 
-        let checkInId;
-        const checkInDateRaw = toObj('check_in_date');
+        // Get case date - use for both check-in and case
+        const caseDateRaw = toObj('case_date');
+        const checkInDateRaw = toObj('check_in_date') || caseDateRaw;
         const finedAmountRaw = toObj('fined_amount');
+        const caseFieldRaw = toObj('case_field');
         
-        // Create check-in if we have date or fined amount
-        if (checkInDateRaw || finedAmountRaw) {
+        // Parse dates
+        const checkInDate = parseDate(checkInDateRaw) || new Date();
+        
+        // Determine if we should create check-in and case
+        const hasFinedAmount = finedAmountRaw !== undefined && finedAmountRaw !== null && finedAmountRaw !== '';
+        const hasCaseField = caseFieldRaw !== undefined && caseFieldRaw !== null && caseFieldRaw !== '';
+        const hasCaseDate = caseDateRaw !== undefined && caseDateRaw !== null && caseDateRaw !== '';
+        
+        let checkInId;
+        // Create check-in if we have date, fined amount, or case field
+        if (checkInDateRaw || hasFinedAmount || hasCaseField || hasCaseDate) {
           const checkInData = {
             business_id: businessId,
             officer_id: userId,
             notes: 'Imported',
+            check_in_date: checkInDate,
           };
           
-          if (checkInDateRaw) {
-            checkInData.check_in_date = new Date(checkInDateRaw);
-          } else {
-            checkInData.check_in_date = new Date(); // Use current date if not provided
-          }
-          
           // Parse fined amount - handle string numbers
-          if (finedAmountRaw) {
+          if (hasFinedAmount) {
             const fineValue = typeof finedAmountRaw === 'string' 
-              ? parseFloat(finedAmountRaw.replace(/[^0-9.]/g, '')) 
+              ? parseFloat(String(finedAmountRaw).replace(/[^0-9.]/g, '')) 
               : parseFloat(finedAmountRaw);
             if (!isNaN(fineValue) && fineValue > 0) {
               checkInData.fine = fineValue;
@@ -336,21 +424,31 @@ export const processImport = async (
           summary.createdCheckIns += 1;
         }
 
-        const caseType = toObj('case_type');
-        if (caseType) {
-          const case_number = generateCaseNumber(new Date(), summary.createdCases + 1);
-          await CaseModel.create(
-            [
-              {
-                check_in_id: checkInId,
-                case_type: caseType,
-                case_number,
-                description: toObj('case_description'),
-                status: (toObj('case_status')) || 'Open',
-              },
-            ],
-            { session },
-          );
+        // Handle case field - extract type and description
+        if (hasCaseField && checkInId) {
+          const { type: caseType, description: caseDescription } = extractCaseType(caseFieldRaw);
+          const case_number = generateCaseNumber(checkInDate, summary.createdCases + 1);
+          
+          const caseData = {
+            check_in_id: checkInId,
+            case_type: caseType,
+            case_number,
+            description: caseDescription,
+            status: 'UnderAssessment',
+            assigned_officer_id: userId,
+          };
+          
+          // Add fine amount to case if available
+          if (hasFinedAmount) {
+            const fineValue = typeof finedAmountRaw === 'string' 
+              ? parseFloat(String(finedAmountRaw).replace(/[^0-9.]/g, '')) 
+              : parseFloat(finedAmountRaw);
+            if (!isNaN(fineValue) && fineValue > 0) {
+              caseData.fine_amount = fineValue;
+            }
+          }
+          
+          await CaseModel.create([caseData], { session });
           summary.createdCases += 1;
         }
 
