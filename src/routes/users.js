@@ -15,15 +15,15 @@ const router = Router();
 
 const UserStatus = ['active', 'inactive', 'suspended'];
 
-const strongPassword = Joi.string()
-  .min(8)
-  .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).+$/)
-  .message('Password must be 8+ chars with upper, lower, number, and symbol');
+// Simple password validation - minimum 4 characters
+const simplePassword = Joi.string()
+  .min(4)
+  .message('Password must be at least 4 characters');
 
 const createUserSchema = Joi.object({
   email: Joi.string().email().required(),
   name: Joi.string().required().trim(),
-  password: strongPassword.required(),
+  password: simplePassword.required(),
   role: Joi.string().valid(...Roles).required(),
   status: Joi.string().valid(...UserStatus).default('active'),
   supervisor_id: Joi.string().hex().length(24).allow(null, ''),
@@ -32,7 +32,7 @@ const createUserSchema = Joi.object({
 const updateUserSchema = Joi.object({
   email: Joi.string().email(),
   name: Joi.string().trim(),
-  password: strongPassword,
+  password: simplePassword,
   role: Joi.string().valid(...Roles),
   status: Joi.string().valid(...UserStatus),
   supervisor_id: Joi.string().hex().length(24).allow(null, ''),
