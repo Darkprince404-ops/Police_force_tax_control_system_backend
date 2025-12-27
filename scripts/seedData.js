@@ -36,7 +36,7 @@ const businessNames = [
 ];
 
 const caseTypes = ['TCC', 'EVC', 'OTHER'];
-const caseStatuses = ['Open', 'UnderReview', 'Resolved', 'Escalated'];
+const caseStatuses = ['UnderAssessment', 'Guilty', 'Fined', 'PendingComeback', 'Resolved', 'Escalated'];
 const fines = [50, 75, 100, 150, 200, 250, 300, 400, 500];
 
 const seedData = async () => {
@@ -93,6 +93,14 @@ const seedData = async () => {
     console.log('\n📦 Creating businesses...');
     
     for (const biz of businessNames) {
+      // Check if business already exists
+      const existing = await BusinessModel.findOne({ business_name: biz.name });
+      if (existing) {
+        businesses.push(existing);
+        console.log(`⚠️  Business already exists: ${biz.name}`);
+        continue;
+      }
+      
       const businessId = await generateBusinessId();
       const taxId = await generateTaxId();
       const regNumber = await generateRegistrationNumber();

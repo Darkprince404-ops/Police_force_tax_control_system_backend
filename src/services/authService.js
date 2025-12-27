@@ -8,6 +8,15 @@ import { recordAudit } from './auditService.js';
 export const login = async (email, password, twoFactorCode) => {
   const user = await UserModel.findOne({ email: email.toLowerCase() });
   if (!user) throw createError(401, 'Invalid credentials');
+  
+  // Check user status before allowing login
+  if (user.status === 'inactive') {
+    throw createError(403, 'Your account is inactive. Please contact an administrator.');
+  }
+  if (user.status === 'suspended') {
+    throw createError(403, 'Your account has been suspended. Please contact an administrator.');
+  }
+  
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw createError(401, 'Invalid credentials');
 
@@ -18,6 +27,11 @@ export const login = async (email, password, twoFactorCode) => {
     }
   }
 
+  // Update login tracking
+  user.lastLoginAt = new Date();
+  user.loginCount = (user.loginCount || 0) + 1;
+  await user.save();
+
   const payload = { sub: user.id, role: user.role, email: user.email };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
@@ -25,7 +39,14 @@ export const login = async (email, password, twoFactorCode) => {
   await recordAudit({ action: 'login', entity: 'user', entityId: user.id, userId: user.id });
 
   return {
-    user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    user: { 
+      id: user.id, 
+      email: user.email, 
+      name: user.name, 
+      role: user.role,
+      status: user.status || 'active',
+      lastLoginAt: user.lastLoginAt,
+    },
     accessToken,
     refreshToken,
   };

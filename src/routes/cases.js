@@ -90,6 +90,93 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
   }
 });
 
+// Get cases for supervisor's officers
+router.get('/my-team', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  try {
+    // Get officers assigned to this supervisor
+    const myOfficers = await UserModel.find({ supervisor_id: req.user.sub }).select('_id');
+    const officerIds = myOfficers.map(o => o._id);
+    
+    if (officerIds.length === 0) {
+      return res.json([]);
+    }
+    
+    const { status, case_type } = req.query;
+    const filter = { assigned_officer_id: { $in: officerIds } };
+    if (status) filter.status = status;
+    if (case_type) filter.case_type = case_type;
+    
+    const cases = await CaseModel.find(filter)
+      .populate({
+        path: 'check_in_id',
+        select: 'fine business_id check_in_date',
+        populate: {
+          path: 'business_id',
+          select: 'business_name business_type owner_name',
+        },
+      })
+      .populate('assigned_officer_id', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    res.json(cases);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reassign case to another officer (supervisor can only reassign to their officers)
+router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  try {
+    const { assigned_officer_id } = req.body;
+    if (!assigned_officer_id) {
+      throw createError(400, 'assigned_officer_id is required');
+    }
+    
+    const caseItem = await CaseModel.findById(req.params.id);
+    if (!caseItem) throw createError(404, 'Case not found');
+    
+    // If supervisor (not admin), verify both old and new officers are under their supervision
+    if (req.user.role === 'supervisor') {
+      const myOfficers = await UserModel.find({ supervisor_id: req.user.sub }).select('_id');
+      const officerIds = myOfficers.map(o => o._id.toString());
+      
+      // Check if new officer is under this supervisor
+      if (!officerIds.includes(assigned_officer_id)) {
+        throw createError(403, 'You can only reassign cases to officers under your supervision');
+      }
+      
+      // Check if current officer is under this supervisor
+      if (caseItem.assigned_officer_id && !officerIds.includes(caseItem.assigned_officer_id.toString())) {
+        throw createError(403, 'You can only reassign cases from officers under your supervision');
+      }
+    }
+    
+    // Verify new officer exists
+    const newOfficer = await UserModel.findById(assigned_officer_id);
+    if (!newOfficer) throw createError(400, 'Officer not found');
+    
+    const oldOfficerId = caseItem.assigned_officer_id;
+    caseItem.assigned_officer_id = assigned_officer_id;
+    await caseItem.save();
+    
+    await recordAudit({
+      action: 'reassign',
+      entity: 'case',
+      entityId: caseItem.id,
+      userId: req.user?.sub,
+      details: { from_officer: oldOfficerId, to_officer: assigned_officer_id },
+    });
+    
+    const updated = await CaseModel.findById(caseItem._id)
+      .populate('assigned_officer_id', 'name email');
+    
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const { status, case_type, assigned_officer_id, business_name, business_type, start, end } = req.query;

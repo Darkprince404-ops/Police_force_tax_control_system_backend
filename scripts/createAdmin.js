@@ -30,7 +30,7 @@ const createAdmin = async () => {
     const passwordHash = await bcrypt.hash(adminPassword, 10);
     const admin = await UserModel.create({
       email: adminEmail,
-      name: 'Ahmed Hassan',
+      name: 'Shaafici abdullahi Mohamed',
       passwordHash,
       role: 'admin',
     });
