@@ -21,13 +21,26 @@ router.post(
   async (req, res, next) => {
     try {
       if (!req.file) throw createError(400, 'File required');
+      
+      console.log('File uploaded:', {
+        originalname: req.file.originalname,
+        filename: req.file.filename,
+        path: req.file.path,
+        size: req.file.size,
+        mimetype: req.file.mimetype,
+      });
+      
       const job = await ImportJobModel.create({
         filename: req.file.path,
         uploadedBy: req.user?.sub,
         status: 'pending',
       });
+      
+      console.log('Import job created:', job.id);
+      
       res.status(201).json({ importId: job.id, filename: req.file.originalname });
     } catch (err) {
+      console.error('Upload error:', err);
       next(err);
     }
   },
