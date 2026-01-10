@@ -38,35 +38,56 @@ router.get(
   requireRole(['supervisor', 'admin']),
   async (req, res, next) => {
     try {
-      const { startDate, endDate } = req.query;
-      let dateFilter = {};
+      const { startDate, endDate, case_type, status, business_search } = req.query;
+      let matchFilter = {};
 
-      // Only apply date filter when a range is provided; otherwise use all data
+      // Date Range
       if (startDate || endDate) {
-        const start = startDate ? new Date(startDate) : new Date(0); // epoch if not provided
+        const start = startDate ? new Date(startDate) : new Date(0);
         start.setHours(0, 0, 0, 0);
         const end = endDate ? new Date(endDate) : new Date();
         end.setHours(23, 59, 59, 999);
-        dateFilter = { createdAt: { $gte: start, $lte: end } };
+        matchFilter.createdAt = { $gte: start, $lte: end };
+      }
+
+      // Direct Filters
+      if (case_type) matchFilter.case_type = case_type;
+      if (status) matchFilter.status = status;
+
+      // Business Search (Name or Type)
+      if (business_search) {
+        const businessFilter = {
+          $or: [
+            { business_name: { $regex: business_search, $options: 'i' } },
+            { business_type: { $regex: business_search, $options: 'i' } }
+          ]
+        };
+        const matchingBusinesses = await BusinessModel.find(businessFilter).select('_id');
+        const businessIds = matchingBusinesses.map(b => b._id);
+
+        const matchingCheckIns = await CheckInModel.find({ business_id: { $in: businessIds } }).select('_id');
+        const checkInIds = matchingCheckIns.map(c => c._id);
+
+        matchFilter.check_in_id = { $in: checkInIds };
       }
 
       // Cases by type
       const casesByType = await CaseModel.aggregate([
-        { $match: dateFilter },
+        { $match: matchFilter },
         { $group: { _id: '$case_type', count: { $sum: 1 } } },
         { $project: { case_type: '$_id', count: 1, _id: 0 } },
       ]);
 
       // Cases by status
       const casesByStatus = await CaseModel.aggregate([
-        { $match: dateFilter },
+        { $match: matchFilter },
         { $group: { _id: '$status', count: { $sum: 1 } } },
         { $project: { status: '$_id', count: 1, _id: 0 } },
       ]);
 
-      // Cases over time (daily)
+      // Cases over time (daily/monthly based on range?) - Keeping daily for now
       const casesOverTime = await CaseModel.aggregate([
-        { $match: dateFilter },
+        { $match: matchFilter },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -79,7 +100,7 @@ router.get(
 
       // Officer workload
       const officerWorkload = await CaseModel.aggregate([
-        { $match: dateFilter },
+        { $match: matchFilter },
         { $group: { _id: '$assigned_officer_id', count: { $sum: 1 } } },
         {
           $lookup: {
@@ -95,9 +116,19 @@ router.get(
         { $limit: 10 },
       ]);
 
-      // Business registrations over time
+      // Business registrations over time (Note: Business stats might need different filtering logic if strictly about businesses, 
+      // but if "New Biz" means distinct new businesses involved in cases, we use this. 
+      // However, usually BusinessRegistrations is about ANY new business. 
+      // For now, let's keep BusinessRegistrations independent of case filters UNLESS it's a date filter, 
+      // OR if we want to show "Businesses involved in these cases". 
+      // The original code filtered BusinessModel by 'dateFilter' (createdAt of business). 
+      // If we apply case filters (status/type), it doesn't make sense for BusinessModel.
+      // So we will ONLY apply date filter to BusinessModel.
+      const businessDateFilter = {};
+      if (matchFilter.createdAt) businessDateFilter.createdAt = matchFilter.createdAt;
+
       const businessRegistrations = await BusinessModel.aggregate([
-        { $match: dateFilter },
+        { $match: businessDateFilter },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -109,12 +140,18 @@ router.get(
       ]);
 
       // Case resolution rate
-      const totalCases = await CaseModel.countDocuments(dateFilter);
+      const totalCases = await CaseModel.countDocuments(matchFilter);
       const resolvedCases = await CaseModel.countDocuments({
-        ...dateFilter,
+        ...matchFilter,
+        status: { $in: ['Resolved', 'Closed', 'Fined', 'Guilty'] }, // Including Fined/Guilty as resolved-ish? Adhering to original logic + user request likely implied resolved
+      });
+      // Original logic was just Resolved/Closed. Sticking to that unless directed otherwise, but ensure consistency.
+      const strictResolved = await CaseModel.countDocuments({
+        ...matchFilter,
         status: { $in: ['Resolved', 'Closed'] },
       });
-      const resolutionRate = totalCases > 0 ? (resolvedCases / totalCases) * 100 : 0;
+
+      const resolutionRate = totalCases > 0 ? (strictResolved / totalCases) * 100 : 0;
 
       res.json({
         casesByType,
@@ -124,7 +161,7 @@ router.get(
         businessRegistrations,
         resolutionRate: Math.round(resolutionRate * 100) / 100,
         totalCases,
-        resolvedCases,
+        resolvedCases: strictResolved,
       });
     } catch (err) {
       next(err);
@@ -201,23 +238,58 @@ router.get(
 );
 
 // Cohort/trend analytics
+// Cohort/trend analytics - Business Registrations
 router.get(
   '/analytics/trends',
   requireAuth,
   requireRole(['supervisor', 'admin']),
-  async (_req, res, next) => {
+  async (req, res, next) => {
     try {
-      const trend = await CaseModel.aggregate([
+      const { startDate, endDate, business_search } = req.query;
+      let matchFilter = {};
+      let start, end;
+
+      // Date Logic: Default to Last 30 Days if not provided
+      if (startDate || endDate) {
+        start = startDate ? new Date(startDate) : new Date(0);
+        start.setHours(0, 0, 0, 0);
+        end = endDate ? new Date(endDate) : new Date();
+        end.setHours(23, 59, 59, 999);
+      } else {
+        end = new Date();
+        start = new Date();
+        start.setDate(end.getDate() - 30);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+      }
+      matchFilter.createdAt = { $gte: start, $lte: end };
+
+      // Determine Bucketing (Day vs Month)
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const isDaily = diffDays <= 31; // Buffer for 31 day months
+      const dateFormat = isDaily ? '%Y-%m-%d' : '%Y-%m';
+
+      // Business Search
+      if (business_search) {
+        matchFilter.$or = [
+          { business_name: { $regex: business_search, $options: 'i' } },
+          { business_type: { $regex: business_search, $options: 'i' } }
+        ];
+      }
+
+      const trend = await BusinessModel.aggregate([
+        { $match: matchFilter },
         {
           $group: {
-            _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
-            cases: { $sum: 1 },
-            fines: { $sum: { $ifNull: ['$fine_amount', 0] } },
+            _id: { $dateToString: { format: dateFormat, date: '$createdAt' } },
+            count: { $sum: 1 },
           },
         },
         { $sort: { _id: 1 } },
-        { $project: { month: '$_id', cases: 1, fines: 1, _id: 0 } },
+        { $project: { date: '$_id', count: 1, _id: 0 } },
       ]);
+
       res.json({ trend });
     } catch (err) {
       next(err);
@@ -288,11 +360,13 @@ router.get(
       const pipeline = [
         { $lookup: { from: 'checkins', localField: 'check_in_id', foreignField: '_id', as: 'check' } },
         { $unwind: '$check' },
-        { $group: { 
-          _id: '$check.business_id', 
-          cases: { $sum: 1 },
-          totalFine: { $sum: { $ifNull: ['$check.fine', 0] } }
-        } },
+        {
+          $group: {
+            _id: '$check.business_id',
+            cases: { $sum: 1 },
+            totalFine: { $sum: { $ifNull: ['$check.fine', 0] } }
+          }
+        },
         { $match: { cases: { $gte: 2 } } },
         { $project: { business_id: '$_id', cases: 1, totalFine: 1, _id: 0 } },
       ];
@@ -361,10 +435,10 @@ router.get(
     try {
       const { case_type, status, startDate, endDate, business_name, business_type } = req.query;
       const filter = {};
-      
+
       if (case_type) filter.case_type = case_type;
       if (status) filter.status = status;
-      
+
       if (startDate || endDate) {
         filter.createdAt = {};
         if (startDate) {
@@ -378,7 +452,7 @@ router.get(
           filter.createdAt.$lte = end;
         }
       }
-      
+
       // Apply business filters if provided
       if (business_name || business_type) {
         const businessFilter = {};
@@ -388,16 +462,16 @@ router.get(
         if (business_type) {
           businessFilter.business_type = { $regex: business_type, $options: 'i' };
         }
-        
+
         const matchingBusinesses = await BusinessModel.find(businessFilter).select('_id');
         const businessIds = matchingBusinesses.map(b => b._id);
-        
+
         const matchingCheckIns = await CheckInModel.find({ business_id: { $in: businessIds } }).select('_id');
         const checkInIds = matchingCheckIns.map(c => c._id);
-        
+
         filter.check_in_id = { $in: checkInIds };
       }
-      
+
       const cases = await CaseModel.find(filter)
         .populate({
           path: 'check_in_id',
@@ -409,7 +483,7 @@ router.get(
         })
         .populate('assigned_officer_id', 'name email')
         .sort({ createdAt: -1 });
-      
+
       res.json(cases);
     } catch (err) {
       next(err);
@@ -425,7 +499,7 @@ router.get(
     try {
       const { reportType } = req.params;
       const { format, startDate, endDate, case_type, status, business_name, business_type } = req.query;
-      
+
       // Admin-only reports
       const adminOnlyReports = ['officer-workload', 'users', 'officers'];
       if (adminOnlyReports.includes(reportType) && req.user?.role !== 'admin') {
@@ -446,7 +520,7 @@ router.get(
       if (business_type) {
         businessFilter.business_type = { $regex: business_type, $options: 'i' };
       }
-      
+
       let checkInFilter = {};
       if (Object.keys(businessFilter).length > 0) {
         const matchingBusinesses = await BusinessModel.find(businessFilter).select('_id');
@@ -455,8 +529,8 @@ router.get(
       }
 
       if (format === 'excel' || format === 'xlsx') {
-        const buffer = await generateExcelReport(reportType, start || undefined, end || undefined, { 
-          case_type: case_type || undefined, 
+        const buffer = await generateExcelReport(reportType, start || undefined, end || undefined, {
+          case_type: case_type || undefined,
           status: status || undefined,
           business_name: business_name || undefined,
           business_type: business_type || undefined,
@@ -465,8 +539,8 @@ router.get(
         res.setHeader('Content-Disposition', `attachment; filename="${reportType}-${startDate || 'all'}.xlsx"`);
         res.send(buffer);
       } else if (format === 'pdf') {
-        const buffer = await generatePDFReport(reportType, start || undefined, end || undefined, { 
-          case_type: case_type || undefined, 
+        const buffer = await generatePDFReport(reportType, start || undefined, end || undefined, {
+          case_type: case_type || undefined,
           status: status || undefined,
           business_name: business_name || undefined,
           business_type: business_type || undefined,
@@ -490,14 +564,14 @@ router.get(
             }
             if (case_type) caseFilter.case_type = case_type;
             if (status) caseFilter.status = status;
-            
+
             // Apply business filter through check-ins
             if (Object.keys(checkInFilter).length > 0) {
               const matchingCheckIns = await CheckInModel.find(checkInFilter).select('_id');
               const checkInIds = matchingCheckIns.map(c => c._id);
               caseFilter.check_in_id = { $in: checkInIds };
             }
-            
+
             data = await CaseModel.find(caseFilter)
               .populate({
                 path: 'check_in_id',
@@ -511,7 +585,7 @@ router.get(
               .select('case_number case_type status description createdAt check_in_id assigned_officer_id')
               .sort({ createdAt: -1 })
               .lean();
-            
+
             // Fetch evidence URLs
             const caseIds = data.map((c) => c._id);
             const evidenceList = await EvidenceModel.find({ case_id: { $in: caseIds } }).lean();
@@ -521,7 +595,7 @@ router.get(
               if (!evidenceMap[key]) evidenceMap[key] = [];
               evidenceMap[key].push(ev.file_url);
             });
-            
+
             // Transform data for CSV
             data = data.map(c => ({
               case_number: c.case_number,
@@ -617,11 +691,11 @@ router.get(
     try {
       const { paper_type, startDate, endDate } = req.query;
       const filter = { 'resolution_papers.0': { $exists: true } };
-      
+
       if (paper_type) {
         filter['resolution_papers.paper_type'] = paper_type;
       }
-      
+
       if (startDate || endDate) {
         const dateFilter = {};
         if (startDate) {
@@ -636,7 +710,7 @@ router.get(
         }
         filter['resolution_papers.uploaded_at'] = dateFilter;
       }
-      
+
       const cases = await CaseModel.find(filter)
         .populate({
           path: 'check_in_id',
@@ -649,7 +723,7 @@ router.get(
         .populate('resolution_papers.officer_id', 'name email')
         .select('case_number resolution_papers check_in_id')
         .lean();
-      
+
       // Flatten papers with case info
       const papers = [];
       cases.forEach((c) => {
@@ -658,7 +732,7 @@ router.get(
             if (!paper_type || paper.paper_type === paper_type) {
               const checkIn = c.check_in_id;
               const business = checkIn?.business_id;
-              
+
               papers.push({
                 case_number: c.case_number,
                 business_name: business?.business_name || 'N/A',
@@ -674,7 +748,7 @@ router.get(
           });
         }
       });
-      
+
       res.json(papers);
     } catch (err) {
       next(err);
