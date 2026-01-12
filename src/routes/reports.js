@@ -666,7 +666,7 @@ router.get(
                 },
               })
               .populate('assigned_officer_id', 'name email')
-              .select('case_number case_type status description createdAt check_in_id assigned_officer_id')
+              .select('case_number case_type status description createdAt check_in_id assigned_officer_id payment_status payment_amount payment_date fine_amount')
               .sort({ createdAt: -1 })
               .lean();
 
@@ -687,7 +687,10 @@ router.get(
               status: c.status,
               description: c.description || '',
               created_at: c.createdAt,
-              fine: c.check_in_id?.fine || 0,
+              fine: c.fine_amount || c.check_in_id?.fine || 0,
+              payment_status: c.payment_status || 'unpaid',
+              payment_amount: c.payment_amount || 0,
+              payment_date: c.payment_date || '',
               business_name: c.check_in_id?.business_id?.business_name || '',
               business_type: c.check_in_id?.business_id?.business_type || '',
               owner_name: c.check_in_id?.business_id?.owner_name || '',
@@ -697,7 +700,7 @@ router.get(
               assigned_officer: c.assigned_officer_id?.name || '',
               evidence_urls: (evidenceMap[c._id.toString()] || []).map((u) => `http://localhost:4000${u}`).join('|'),
             }));
-            fields = ['case_number', 'case_type', 'status', 'description', 'fine', 'business_name', 'business_type', 'owner_name', 'business_id', 'business_tax_id', 'phone', 'assigned_officer', 'evidence_urls', 'created_at'];
+            fields = ['case_number', 'case_type', 'status', 'description', 'fine', 'payment_status', 'payment_amount', 'payment_date', 'business_name', 'business_type', 'owner_name', 'business_id', 'business_tax_id', 'phone', 'assigned_officer', 'evidence_urls', 'created_at'];
             break;
           case 'cases-summary':
             data = await CaseModel.aggregate([

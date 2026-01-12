@@ -39,6 +39,7 @@ router.post('/', requireAuth, requireRole(['officer', 'supervisor', 'admin']), a
       ...value,
       case_number,
       status: 'Open',
+      payment_status: 'unpaid', // Default to unpaid (will be set to not_applicable if no fine)
       lastActivityAt: new Date(),
       statusChangedAt: new Date(), // Initial status set
     });
@@ -475,6 +476,7 @@ router.post(
       const oldStatus = caseItem.status;
       caseItem.status = 'NotGuilty';
       caseItem.result = 'Pass';
+      caseItem.payment_status = 'not_applicable'; // No payment required for NotGuilty
       caseItem.lastActivityAt = new Date();
       if (oldStatus !== 'NotGuilty') {
         caseItem.statusChangedAt = new Date();
@@ -524,6 +526,7 @@ router.post(
       caseItem.status = 'Fined';
       caseItem.result = 'Fail';
       caseItem.fine_amount = value.fine_amount;
+      caseItem.payment_status = 'unpaid'; // Set to unpaid when fine is issued
       caseItem.lastActivityAt = new Date();
       if (oldStatus !== 'Fined') {
         caseItem.statusChangedAt = new Date();

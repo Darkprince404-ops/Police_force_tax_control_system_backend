@@ -33,6 +33,14 @@ const caseSchema = new Schema(
     resolvedAt: { type: Date, index: true }, // Timestamp when case was resolved
     lastActivityAt: { type: Date, index: true }, // Timestamp of last activity/update
     statusChangedAt: { type: Date, index: true }, // Timestamp when status last changed
+    payment_status: { 
+      type: String, 
+      enum: ['unpaid', 'pending_verification', 'paid', 'not_applicable'], 
+      default: 'unpaid',
+      index: true 
+    }, // Payment verification status (decoupled from case status)
+    payment_amount: { type: Number, default: 0 }, // Total verified payment amount
+    payment_date: { type: Date }, // Date payment was verified
   },
   { timestamps: true },
 );
