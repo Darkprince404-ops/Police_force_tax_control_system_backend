@@ -39,6 +39,7 @@ router.post('/', requireAuth, requireRole(['officer', 'supervisor', 'admin']), a
       ...value,
       case_number,
       status: 'Open',
+      lastActivityAt: new Date(),
     });
     await recordAudit({
       action: 'create',
@@ -75,8 +76,20 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
   try {
     const { error, value } = updateSchema.validate(req.body);
     if (error) throw createError(400, error.message);
+    
+    // Get current case to check status change
+    const currentCase = await CaseModel.findById(req.params.id);
+    if (!currentCase) throw createError(404, 'Not found');
+    
+    // Set lastActivityAt on any update
+    value.lastActivityAt = new Date();
+    
+    // Set resolvedAt if status is changing to Resolved
+    if (value.status === 'Resolved' && currentCase.status !== 'Resolved') {
+      value.resolvedAt = new Date();
+    }
+    
     const updated = await CaseModel.findByIdAndUpdate(req.params.id, value, { new: true });
-    if (!updated) throw createError(404, 'Not found');
     await recordAudit({
       action: 'update',
       entity: 'case',
@@ -202,6 +215,7 @@ router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), a
 
     const oldOfficerId = caseItem.assigned_officer_id;
     caseItem.assigned_officer_id = assigned_officer_id;
+    caseItem.lastActivityAt = new Date();
     await caseItem.save();
 
     await recordAudit({
@@ -416,6 +430,15 @@ router.put(
       if (value.notes !== undefined) {
         paper.notes = value.notes;
       }
+      
+      // Update lastActivityAt when paper is confirmed
+      caseItem.lastActivityAt = new Date();
+      
+      // If paper confirms payment and case is Fined, consider resolving
+      if (paper.paper_type === 'fine_paid' && caseItem.status === 'Fined' && !caseItem.resolvedAt) {
+        caseItem.status = 'Resolved';
+        caseItem.resolvedAt = new Date();
+      }
 
       await caseItem.save();
       await paper.populate('officer_id', 'name email');
@@ -457,6 +480,7 @@ router.post(
 
       caseItem.status = 'NotGuilty';
       caseItem.result = 'Pass';
+      caseItem.lastActivityAt = new Date();
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
@@ -500,6 +524,7 @@ router.post(
       caseItem.status = 'Fined';
       caseItem.result = 'Fail';
       caseItem.fine_amount = value.fine_amount;
+      caseItem.lastActivityAt = new Date();
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
@@ -544,6 +569,7 @@ router.post(
       caseItem.result = 'Fail';
       caseItem.comeback_date = new Date(value.comeback_date);
       caseItem.comeback_notification_sent = false;
+      caseItem.lastActivityAt = new Date();
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
