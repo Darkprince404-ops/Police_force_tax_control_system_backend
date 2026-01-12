@@ -170,7 +170,7 @@ router.get(
   },
 );
 
-// V2 Dashboard Stats (Optimized)
+// V2 Dashboard Stats (Optimized) - Uses unified metrics service
 router.get(
   '/dashboard-stats-v2',
   requireAuth,
@@ -182,28 +182,24 @@ router.get(
       thirtyDaysAgo.setDate(today.getDate() - 30);
       thirtyDaysAgo.setHours(0, 0, 0, 0);
 
-      // 1. Total Cases (Last 30 Days)
-      const totalCases = await CaseModel.countDocuments({
+      // Use unified metrics service
+      const { getDashboardMetrics, getTotalCases, getPendingBacklog, getOverdueComebacks } = await import('../services/dashboardMetricsService.js');
+
+      // 1. Total Cases (Last 30 Days) - with date filter
+      const totalCases = await getTotalCases({
         createdAt: { $gte: thirtyDaysAgo }
       });
 
       // 2. Resolution Rate (Cohort: Created in last 30d AND Resolved)
-      const resolvedCohort = await CaseModel.countDocuments({
-        createdAt: { $gte: thirtyDaysAgo },
-        status: { $in: ['Resolved', 'Closed', 'Fined', 'NotGuilty', 'Guilty'] }
-      });
-      const resolutionRate = totalCases > 0 ? (resolvedCohort / totalCases) * 100 : 0;
-
-      // 3. Pending Backlog (Snapshot)
-      const pendingBacklog = await CaseModel.countDocuments({
-        status: { $in: ['Open', 'UnderAssessment', 'PendingComeback'] }
+      const { resolution_rate } = await getDashboardMetrics({
+        startDate: thirtyDaysAgo.toISOString().split('T')[0]
       });
 
-      // 4. Overdue Comebacks (Snapshot)
-      const overdueComebacks = await CaseModel.countDocuments({
-        status: 'PendingComeback',
-        comeback_date: { $lt: today }
-      });
+      // 3. Pending Backlog (Snapshot - all time)
+      const pendingBacklog = await getPendingBacklog();
+
+      // 4. Overdue Comebacks (Snapshot - all time)
+      const overdueComebacks = await getOverdueComebacks();
 
       // 5. Trends (Last 30 Days)
       const trends = await CaseModel.aggregate([
@@ -245,7 +241,7 @@ router.get(
       res.json({
         metrics: {
           total_cases: totalCases,
-          resolution_rate: Math.round(resolutionRate * 10) / 10,
+          resolution_rate: resolution_rate,
           pending_backlog: pendingBacklog,
           overdue_comebacks: overdueComebacks
         },

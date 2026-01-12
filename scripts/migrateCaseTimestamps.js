@@ -30,8 +30,14 @@ const migrateTimestamps = async () => {
         needsUpdate = true;
       }
 
-      // Set resolvedAt if status is Resolved and resolvedAt is not set
-      if (caseItem.status === 'Resolved' && !caseItem.resolvedAt) {
+      // Set statusChangedAt to createdAt if not set (initial status)
+      if (!caseItem.statusChangedAt) {
+        updates.statusChangedAt = caseItem.createdAt || new Date();
+        needsUpdate = true;
+      }
+
+      // Set resolvedAt if status is Resolved or NotGuilty and resolvedAt is not set
+      if ((caseItem.status === 'Resolved' || caseItem.status === 'NotGuilty') && !caseItem.resolvedAt) {
         updates.resolvedAt = caseItem.updatedAt || caseItem.createdAt || new Date();
         needsUpdate = true;
         resolvedCount++;

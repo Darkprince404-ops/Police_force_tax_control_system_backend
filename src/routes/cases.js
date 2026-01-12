@@ -40,6 +40,7 @@ router.post('/', requireAuth, requireRole(['officer', 'supervisor', 'admin']), a
       case_number,
       status: 'Open',
       lastActivityAt: new Date(),
+      statusChangedAt: new Date(), // Initial status set
     });
     await recordAudit({
       action: 'create',
@@ -84,8 +85,14 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
     // Set lastActivityAt on any update
     value.lastActivityAt = new Date();
     
-    // Set resolvedAt if status is changing to Resolved
-    if (value.status === 'Resolved' && currentCase.status !== 'Resolved') {
+    // Set statusChangedAt if status is changing
+    if (value.status && value.status !== currentCase.status) {
+      value.statusChangedAt = new Date();
+    }
+    
+    // Set resolvedAt if status is changing to Resolved or NotGuilty
+    if (value.status && (value.status === 'Resolved' || value.status === 'NotGuilty') && 
+        currentCase.status !== value.status) {
       value.resolvedAt = new Date();
     }
     
@@ -106,37 +113,13 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
 // Get needs-attention items (Overdue Comebacks & Stale Assessments)
 router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
   try {
-    const today = new Date();
-    const fortyEightHoursAgo = new Date(today.getTime() - 48 * 60 * 60 * 1000);
+    const { getOverdueComebacksList, getAgingAssessments } = await import('../services/dashboardMetricsService.js');
+    
+    // 1. Overdue Comebacks: PendingComeback && comeback_date < today
+    const overdueComebacks = await getOverdueComebacksList(10);
 
-    // 1. Overdue Comebacks
-    const overdueComebacks = await CaseModel.find({
-      status: 'PendingComeback',
-      comeback_date: { $lt: today }
-    })
-      .select('case_number status comeback_date assigned_officer_id check_in_id')
-      .populate('assigned_officer_id', 'name')
-      .populate({
-        path: 'check_in_id',
-        populate: { path: 'business_id', select: 'business_name' }
-      })
-      .sort({ comeback_date: 1 })
-      .limit(10);
-
-    // 2. Stale Assessments (UnderAssessment > 48h)
-    // Using updatedAt as a proxy for lastActivityAt for now
-    const staleAssessments = await CaseModel.find({
-      status: 'UnderAssessment',
-      updatedAt: { $lt: fortyEightHoursAgo }
-    })
-      .select('case_number status updatedAt assigned_officer_id check_in_id')
-      .populate('assigned_officer_id', 'name')
-      .populate({
-        path: 'check_in_id',
-        populate: { path: 'business_id', select: 'business_name' }
-      })
-      .sort({ updatedAt: 1 }) // Oldest first
-      .limit(10);
+    // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
+    const staleAssessments = await getAgingAssessments(48, 10);
 
     res.json({
       overdue_comebacks: overdueComebacks,
@@ -237,11 +220,18 @@ router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), a
 
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { status, case_type, assigned_officer_id, business_name, business_type, business_search, start, end } = req.query;
+    const { status, case_type, assigned_officer_id, business_name, business_type, business_search, start, end, overdue } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (case_type) filter.case_type = case_type;
     if (assigned_officer_id) filter.assigned_officer_id = assigned_officer_id;
+    
+    // Support overdue filter for PendingComeback cases
+    if (overdue === 'true' && status === 'PendingComeback') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      filter.comeback_date = { $lt: today };
+    }
 
     // If business filters are provided, we need to find matching businesses first
     let businessFilter = {};
@@ -436,8 +426,12 @@ router.put(
       
       // If paper confirms payment and case is Fined, consider resolving
       if (paper.paper_type === 'fine_paid' && caseItem.status === 'Fined' && !caseItem.resolvedAt) {
+        const oldStatus = caseItem.status;
         caseItem.status = 'Resolved';
         caseItem.resolvedAt = new Date();
+        if (oldStatus !== 'Resolved') {
+          caseItem.statusChangedAt = new Date();
+        }
       }
 
       await caseItem.save();
@@ -478,9 +472,14 @@ router.post(
         throw createError(400, 'Case is not in assessment stage');
       }
 
+      const oldStatus = caseItem.status;
       caseItem.status = 'NotGuilty';
       caseItem.result = 'Pass';
       caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'NotGuilty') {
+        caseItem.statusChangedAt = new Date();
+        caseItem.resolvedAt = new Date(); // NotGuilty is a resolution
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
@@ -521,10 +520,14 @@ router.post(
         throw createError(400, 'Case is not in assessment stage');
       }
 
+      const oldStatus = caseItem.status;
       caseItem.status = 'Fined';
       caseItem.result = 'Fail';
       caseItem.fine_amount = value.fine_amount;
       caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'Fined') {
+        caseItem.statusChangedAt = new Date();
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
@@ -565,11 +568,15 @@ router.post(
         throw createError(400, 'Case is not in assessment stage');
       }
 
+      const oldStatus = caseItem.status;
       caseItem.status = 'PendingComeback';
       caseItem.result = 'Fail';
       caseItem.comeback_date = new Date(value.comeback_date);
       caseItem.comeback_notification_sent = false;
       caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'PendingComeback') {
+        caseItem.statusChangedAt = new Date();
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
