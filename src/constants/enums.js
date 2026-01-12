@@ -1,4 +1,4 @@
-export const Roles = ['officer', 'supervisor', 'admin'];
+export const Roles = ['officer', 'supervisor', 'admin', 'finance'];
 
 export const CaseTypes = ['TCC', 'EVC', 'OTHER'];
 

@@ -2,11 +2,14 @@ import { Router } from 'express';
 import createError from 'http-errors';
 
 import { requireAuth } from '../middleware/auth.js';
+import { requireRole } from '../middleware/roles.js';
 import {
   getUserNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  checkComebackDates,
 } from '../services/notificationService.js';
+import { recordAudit } from '../services/auditService.js';
 
 const router = Router();
 
@@ -50,6 +53,28 @@ router.put('/read-all', requireAuth, async (req, res, next) => {
   try {
     const result = await markAllNotificationsAsRead(req.user?.sub);
     res.json({ message: 'All notifications marked as read', modified: result.modifiedCount });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Manual trigger for comeback notifications (admin/supervisor only)
+router.post('/trigger-comeback-check', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  try {
+    const result = await checkComebackDates();
+    
+    await recordAudit({
+      action: 'trigger_notifications',
+      entity: 'notification',
+      entityId: null,
+      userId: req.user?.sub,
+      details: result,
+    });
+    
+    res.json({
+      message: 'Comeback notification check completed',
+      ...result
+    });
   } catch (err) {
     next(err);
   }

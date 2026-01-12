@@ -16,6 +16,7 @@ import { notificationRoutes } from './notifications.js';
 import { auditRoutes } from './audit.js';
 import { editRequestRoutes } from './editRequests.js';
 import { fileRoutes } from './files.js';
+import { paymentRoutes } from './payments.js';
 
 const router = Router();
 
@@ -61,6 +62,7 @@ router.use('/notifications', notificationRoutes);
 router.use('/audit', auditRoutes);
 router.use('/edit-requests', editRequestRoutes);
 router.use('/files', fileRoutes);
+router.use('/payments', paymentRoutes);
 
 export const routes = router;
 

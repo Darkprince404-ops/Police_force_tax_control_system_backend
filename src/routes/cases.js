@@ -39,6 +39,9 @@ router.post('/', requireAuth, requireRole(['officer', 'supervisor', 'admin']), a
       ...value,
       case_number,
       status: 'Open',
+      payment_status: 'unpaid', // Default to unpaid (will be set to not_applicable if no fine)
+      lastActivityAt: new Date(),
+      statusChangedAt: new Date(), // Initial status set
     });
     await recordAudit({
       action: 'create',
@@ -75,8 +78,26 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
   try {
     const { error, value } = updateSchema.validate(req.body);
     if (error) throw createError(400, error.message);
+    
+    // Get current case to check status change
+    const currentCase = await CaseModel.findById(req.params.id);
+    if (!currentCase) throw createError(404, 'Not found');
+    
+    // Set lastActivityAt on any update
+    value.lastActivityAt = new Date();
+    
+    // Set statusChangedAt if status is changing
+    if (value.status && value.status !== currentCase.status) {
+      value.statusChangedAt = new Date();
+    }
+    
+    // Set resolvedAt if status is changing to Resolved or NotGuilty
+    if (value.status && (value.status === 'Resolved' || value.status === 'NotGuilty') && 
+        currentCase.status !== value.status) {
+      value.resolvedAt = new Date();
+    }
+    
     const updated = await CaseModel.findByIdAndUpdate(req.params.id, value, { new: true });
-    if (!updated) throw createError(404, 'Not found');
     await recordAudit({
       action: 'update',
       entity: 'case',
@@ -90,22 +111,42 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
   }
 });
 
+// Get needs-attention items (Overdue Comebacks & Stale Assessments)
+router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  try {
+    const { getOverdueComebacksList, getAgingAssessments } = await import('../services/dashboardMetricsService.js');
+    
+    // 1. Overdue Comebacks: PendingComeback && comeback_date < today
+    const overdueComebacks = await getOverdueComebacksList(10);
+
+    // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
+    const staleAssessments = await getAgingAssessments(48, 10);
+
+    res.json({
+      overdue_comebacks: overdueComebacks,
+      stale_assessments: staleAssessments
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get cases for supervisor's officers
 router.get('/my-team', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
   try {
     // Get officers assigned to this supervisor
     const myOfficers = await UserModel.find({ supervisor_id: req.user.sub }).select('_id');
     const officerIds = myOfficers.map(o => o._id);
-    
+
     if (officerIds.length === 0) {
       return res.json([]);
     }
-    
+
     const { status, case_type } = req.query;
     const filter = { assigned_officer_id: { $in: officerIds } };
     if (status) filter.status = status;
     if (case_type) filter.case_type = case_type;
-    
+
     const cases = await CaseModel.find(filter)
       .populate({
         path: 'check_in_id',
@@ -118,7 +159,7 @@ router.get('/my-team', requireAuth, requireRole(['supervisor', 'admin']), async 
       .populate('assigned_officer_id', 'name email')
       .sort({ createdAt: -1 })
       .lean();
-    
+
     res.json(cases);
   } catch (err) {
     next(err);
@@ -132,34 +173,35 @@ router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), a
     if (!assigned_officer_id) {
       throw createError(400, 'assigned_officer_id is required');
     }
-    
+
     const caseItem = await CaseModel.findById(req.params.id);
     if (!caseItem) throw createError(404, 'Case not found');
-    
+
     // If supervisor (not admin), verify both old and new officers are under their supervision
     if (req.user.role === 'supervisor') {
       const myOfficers = await UserModel.find({ supervisor_id: req.user.sub }).select('_id');
       const officerIds = myOfficers.map(o => o._id.toString());
-      
+
       // Check if new officer is under this supervisor
       if (!officerIds.includes(assigned_officer_id)) {
         throw createError(403, 'You can only reassign cases to officers under your supervision');
       }
-      
+
       // Check if current officer is under this supervisor
       if (caseItem.assigned_officer_id && !officerIds.includes(caseItem.assigned_officer_id.toString())) {
         throw createError(403, 'You can only reassign cases from officers under your supervision');
       }
     }
-    
+
     // Verify new officer exists
     const newOfficer = await UserModel.findById(assigned_officer_id);
     if (!newOfficer) throw createError(400, 'Officer not found');
-    
+
     const oldOfficerId = caseItem.assigned_officer_id;
     caseItem.assigned_officer_id = assigned_officer_id;
+    caseItem.lastActivityAt = new Date();
     await caseItem.save();
-    
+
     await recordAudit({
       action: 'reassign',
       entity: 'case',
@@ -167,10 +209,10 @@ router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), a
       userId: req.user?.sub,
       details: { from_officer: oldOfficerId, to_officer: assigned_officer_id },
     });
-    
+
     const updated = await CaseModel.findById(caseItem._id)
       .populate('assigned_officer_id', 'name email');
-    
+
     res.json(updated);
   } catch (err) {
     next(err);
@@ -179,12 +221,19 @@ router.put('/:id/reassign', requireAuth, requireRole(['supervisor', 'admin']), a
 
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { status, case_type, assigned_officer_id, business_name, business_type, start, end } = req.query;
+    const { status, case_type, assigned_officer_id, business_name, business_type, business_search, start, end, overdue } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (case_type) filter.case_type = case_type;
     if (assigned_officer_id) filter.assigned_officer_id = assigned_officer_id;
     
+    // Support overdue filter for PendingComeback cases
+    if (overdue === 'true' && status === 'PendingComeback') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      filter.comeback_date = { $lt: today };
+    }
+
     // If business filters are provided, we need to find matching businesses first
     let businessFilter = {};
     if (business_name) {
@@ -193,21 +242,28 @@ router.get('/', requireAuth, async (req, res, next) => {
     if (business_type) {
       businessFilter.business_type = { $regex: business_type, $options: 'i' };
     }
-    
+    if (business_search) {
+      if (!businessFilter.$or) businessFilter.$or = [];
+      businessFilter.$or.push(
+        { business_name: { $regex: business_search, $options: 'i' } },
+        { business_type: { $regex: business_search, $options: 'i' } }
+      );
+    }
+
     let cases;
     if (Object.keys(businessFilter).length > 0) {
       // Find businesses matching the filter
       const matchingBusinesses = await BusinessModel.find(businessFilter).select('_id');
       const businessIds = matchingBusinesses.map(b => b._id);
-      
+
       // Find check-ins for these businesses
       const matchingCheckIns = await CheckInModel.find({ business_id: { $in: businessIds } }).select('_id');
       const checkInIds = matchingCheckIns.map(c => c._id);
-      
+
       // Filter cases by check-in IDs
       filter.check_in_id = { $in: checkInIds };
     }
-    
+
     if (start || end) {
       filter.createdAt = {};
       if (start) filter.createdAt.$gte = new Date(String(start));
@@ -225,7 +281,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       })
       .populate('assigned_officer_id', 'name email')
       .lean();
-    
+
     // Add evidence count to each case
     const { EvidenceModel } = await import('../models/index.js');
     const caseIds = cases.map(c => c._id);
@@ -233,19 +289,19 @@ router.get('/', requireAuth, async (req, res, next) => {
       { $match: { case_id: { $in: caseIds } } },
       { $group: { _id: '$case_id', count: { $sum: 1 } } },
     ]);
-    
+
     const evidenceMap = {};
     evidenceCounts.forEach((ec) => {
       evidenceMap[ec._id.toString()] = ec.count;
     });
-    
+
     cases = cases.map((c) => ({
       ...c,
       evidence_count: evidenceMap[c._id.toString()] || 0,
     }));
-    
+
     cases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
+
     res.json(cases);
   } catch (err) {
     next(err);
@@ -267,12 +323,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
       .populate('resolution_papers.officer_id', 'name email')
       .lean();
     if (!c) throw createError(404, 'Not found');
-    
+
     // Add evidence count
     const { EvidenceModel } = await import('../models/index.js');
     const evidenceCount = await EvidenceModel.countDocuments({ case_id: c._id });
     c.evidence_count = evidenceCount;
-    
+
     res.json(c);
   } catch (err) {
     next(err);
@@ -294,15 +350,15 @@ router.post(
     try {
       const { error, value } = paperUploadSchema.validate(req.body);
       if (error) throw createError(400, error.message);
-      
+
       if (!req.file) throw createError(400, 'File is required');
-      
+
       const caseItem = await CaseModel.findById(req.params.id);
       if (!caseItem) throw createError(404, 'Case not found');
-      
+
       // Extract date from file
       const extractedDate = await extractDateFromFile(req.file.path, req.file.mimetype);
-      
+
       // Create paper object (without confirmed_date yet - will be set when officer confirms)
       const paperData = {
         paper_type: value.paper_type,
@@ -312,14 +368,14 @@ router.post(
         uploaded_at: new Date(),
         notes: value.notes || '',
       };
-      
+
       // Add paper to case
       caseItem.resolution_papers.push(paperData);
       await caseItem.save();
-      
+
       const savedPaper = caseItem.resolution_papers[caseItem.resolution_papers.length - 1];
       await savedPaper.populate('officer_id', 'name email');
-      
+
       await recordAudit({
         action: 'create',
         entity: 'case_paper',
@@ -327,7 +383,7 @@ router.post(
         userId: req.user?.sub,
         details: { case_id: caseItem.id, paper_type: value.paper_type },
       });
-      
+
       res.status(201).json({
         paper: savedPaper,
         extracted_date: extractedDate,
@@ -353,22 +409,35 @@ router.put(
     try {
       const { error, value } = confirmPaperSchema.validate(req.body);
       if (error) throw createError(400, error.message);
-      
+
       const caseItem = await CaseModel.findById(req.params.id);
       if (!caseItem) throw createError(404, 'Case not found');
-      
+
       const paper = caseItem.resolution_papers.id(req.params.paperId);
       if (!paper) throw createError(404, 'Paper not found');
-      
+
       // Update confirmed date and notes
       paper.confirmed_date = value.confirmed_date;
       if (value.notes !== undefined) {
         paper.notes = value.notes;
       }
       
+      // Update lastActivityAt when paper is confirmed
+      caseItem.lastActivityAt = new Date();
+      
+      // If paper confirms payment and case is Fined, consider resolving
+      if (paper.paper_type === 'fine_paid' && caseItem.status === 'Fined' && !caseItem.resolvedAt) {
+        const oldStatus = caseItem.status;
+        caseItem.status = 'Resolved';
+        caseItem.resolvedAt = new Date();
+        if (oldStatus !== 'Resolved') {
+          caseItem.statusChangedAt = new Date();
+        }
+      }
+
       await caseItem.save();
       await paper.populate('officer_id', 'name email');
-      
+
       await recordAudit({
         action: 'update',
         entity: 'case_paper',
@@ -376,7 +445,7 @@ router.put(
         userId: req.user?.sub,
         details: { confirmed_date: value.confirmed_date },
       });
-      
+
       res.json(paper);
     } catch (err) {
       next(err);
@@ -397,19 +466,26 @@ router.post(
     try {
       const { error, value } = notGuiltySchema.validate(req.body);
       if (error) throw createError(400, error.message);
-      
+
       const caseItem = await CaseModel.findById(req.params.id);
       if (!caseItem) throw createError(404, 'Case not found');
       if (caseItem.status !== 'UnderAssessment') {
         throw createError(400, 'Case is not in assessment stage');
       }
-      
+
+      const oldStatus = caseItem.status;
       caseItem.status = 'NotGuilty';
       caseItem.result = 'Pass';
+      caseItem.payment_status = 'not_applicable'; // No payment required for NotGuilty
+      caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'NotGuilty') {
+        caseItem.statusChangedAt = new Date();
+        caseItem.resolvedAt = new Date(); // NotGuilty is a resolution
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
-      
+
       await caseItem.save();
       await recordAudit({
         action: 'update',
@@ -418,7 +494,7 @@ router.post(
         userId: req.user?.sub,
         details: { status: 'NotGuilty', decision: 'not_guilty' },
       });
-      
+
       res.json(caseItem);
     } catch (err) {
       next(err);
@@ -439,20 +515,26 @@ router.post(
     try {
       const { error, value } = guiltyFineSchema.validate(req.body);
       if (error) throw createError(400, error.message);
-      
+
       const caseItem = await CaseModel.findById(req.params.id);
       if (!caseItem) throw createError(404, 'Case not found');
       if (caseItem.status !== 'UnderAssessment') {
         throw createError(400, 'Case is not in assessment stage');
       }
-      
+
+      const oldStatus = caseItem.status;
       caseItem.status = 'Fined';
       caseItem.result = 'Fail';
       caseItem.fine_amount = value.fine_amount;
+      caseItem.payment_status = 'unpaid'; // Set to unpaid when fine is issued
+      caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'Fined') {
+        caseItem.statusChangedAt = new Date();
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
-      
+
       await caseItem.save();
       await recordAudit({
         action: 'update',
@@ -461,7 +543,7 @@ router.post(
         userId: req.user?.sub,
         details: { status: 'Fined', fine_amount: value.fine_amount, decision: 'guilty_fine' },
       });
-      
+
       res.json(caseItem);
     } catch (err) {
       next(err);
@@ -482,21 +564,26 @@ router.post(
     try {
       const { error, value } = guiltyComebackSchema.validate(req.body);
       if (error) throw createError(400, error.message);
-      
+
       const caseItem = await CaseModel.findById(req.params.id);
       if (!caseItem) throw createError(404, 'Case not found');
       if (caseItem.status !== 'UnderAssessment') {
         throw createError(400, 'Case is not in assessment stage');
       }
-      
+
+      const oldStatus = caseItem.status;
       caseItem.status = 'PendingComeback';
       caseItem.result = 'Fail';
       caseItem.comeback_date = new Date(value.comeback_date);
       caseItem.comeback_notification_sent = false;
+      caseItem.lastActivityAt = new Date();
+      if (oldStatus !== 'PendingComeback') {
+        caseItem.statusChangedAt = new Date();
+      }
       if (value.notes) {
         caseItem.description = (caseItem.description || '') + '\n\nDecision: ' + value.notes;
       }
-      
+
       await caseItem.save();
       await recordAudit({
         action: 'update',
@@ -505,7 +592,7 @@ router.post(
         userId: req.user?.sub,
         details: { status: 'PendingComeback', comeback_date: value.comeback_date, decision: 'guilty_comeback' },
       });
-      
+
       res.json(caseItem);
     } catch (err) {
       next(err);

@@ -30,10 +30,29 @@ const caseSchema = new Schema(
     comeback_notification_sent: { type: Boolean, default: false }, // Track if notification was sent
     fine_amount: { type: Number, default: 0 }, // Fine amount if found guilty
     resolution_papers: [resolutionPaperSchema],
+    resolvedAt: { type: Date, index: true }, // Timestamp when case was resolved
+    lastActivityAt: { type: Date, index: true }, // Timestamp of last activity/update
+    statusChangedAt: { type: Date, index: true }, // Timestamp when status last changed
+    payment_status: { 
+      type: String, 
+      enum: ['unpaid', 'pending_verification', 'paid', 'not_applicable'], 
+      default: 'unpaid',
+      index: true 
+    }, // Payment verification status (decoupled from case status)
+    payment_amount: { type: Number, default: 0 }, // Total verified payment amount
+    payment_date: { type: Date }, // Date payment was verified
   },
   { timestamps: true },
 );
 
 caseSchema.index({ case_type: 1, status: 1, case_number: 1 });
+caseSchema.index({ status: 1, createdAt: -1 }); // Needs Attention & Recent Activity
+caseSchema.index({ assigned_officer_id: 1, status: 1 }); // My Team
+caseSchema.index({ status: 1, comeback_date: 1 }); // Overdue Comebacks (note: order matters, equality first often better, but range usage varies. Status is equality, comeback_date is range)
+caseSchema.index({ status: 1, lastActivityAt: -1 }); // Aging assessments query
+caseSchema.index({ status: 1, resolvedAt: -1 }); // Resolved cases queries
+caseSchema.index({ status: 1, statusChangedAt: -1 }); // Status change tracking
+caseSchema.index({ lastActivityAt: 1 }); // General activity queries
+
 
 export const CaseModel = model('Case', caseSchema);

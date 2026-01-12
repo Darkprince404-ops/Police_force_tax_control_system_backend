@@ -59,7 +59,10 @@ export const createComebackNotification = async (caseItem, checkIn, business) =>
 };
 
 /**
- * Check and send notifications for cases with comeback dates today or within the next hour
+ * Check and send notifications for overdue comebacks and upcoming comebacks
+ * Sends notifications for:
+ * 1. Overdue comebacks (comeback_date < today) - immediate notification
+ * 2. Upcoming comebacks (comeback_date = today or tomorrow) - reminder notification
  */
 export const checkComebackDates = async () => {
   try {
@@ -68,17 +71,29 @@ export const checkComebackDates = async () => {
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(23, 59, 59, 999);
     
-    // Also check for cases coming up in the next hour (for immediate testing)
-    const nextHour = new Date(now);
-    nextHour.setHours(nextHour.getHours() + 1);
+    // Find overdue comebacks (past due date) - always notify
+    const overdueCases = await CaseModel.find({
+      status: 'PendingComeback',
+      comeback_date: { $lt: today },
+      comeback_notification_sent: false, // Only notify once
+    })
+      .populate({
+        path: 'check_in_id',
+        select: 'business_id officer_id',
+        populate: {
+          path: 'business_id',
+          select: 'business_name owner_name',
+        },
+      });
     
-    // Find cases with comeback dates today or within next hour that haven't been notified
-    const cases = await CaseModel.find({
+    // Find upcoming comebacks (today or tomorrow) - reminder notification
+    const upcomingCases = await CaseModel.find({
       status: 'PendingComeback',
       comeback_date: { 
-        $gte: today, 
-        $lte: nextHour  // Changed from $lt: tomorrow to include next hour
+        $gte: today,
+        $lte: tomorrow
       },
       comeback_notification_sent: false,
     })
@@ -91,8 +106,10 @@ export const checkComebackDates = async () => {
         },
       });
     
+    const allCases = [...overdueCases, ...upcomingCases];
     const notifications = [];
-    for (const caseItem of cases) {
+    
+    for (const caseItem of allCases) {
       if (caseItem.check_in_id && caseItem.check_in_id.business_id) {
         const notifs = await createComebackNotification(
           caseItem,
@@ -103,7 +120,12 @@ export const checkComebackDates = async () => {
       }
     }
     
-    return { checked: cases.length, notifications: notifications.length };
+    return { 
+      checked: allCases.length, 
+      notifications: notifications.length,
+      overdue: overdueCases.length,
+      upcoming: upcomingCases.length
+    };
   } catch (error) {
     console.error('Error checking comeback dates:', error);
     throw error;
