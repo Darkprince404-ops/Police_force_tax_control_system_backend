@@ -90,6 +90,50 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
   }
 });
 
+// Get needs-attention items (Overdue Comebacks & Stale Assessments)
+router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  try {
+    const today = new Date();
+    const fortyEightHoursAgo = new Date(today.getTime() - 48 * 60 * 60 * 1000);
+
+    // 1. Overdue Comebacks
+    const overdueComebacks = await CaseModel.find({
+      status: 'PendingComeback',
+      comeback_date: { $lt: today }
+    })
+      .select('case_number status comeback_date assigned_officer_id check_in_id')
+      .populate('assigned_officer_id', 'name')
+      .populate({
+        path: 'check_in_id',
+        populate: { path: 'business_id', select: 'business_name' }
+      })
+      .sort({ comeback_date: 1 })
+      .limit(10);
+
+    // 2. Stale Assessments (UnderAssessment > 48h)
+    // Using updatedAt as a proxy for lastActivityAt for now
+    const staleAssessments = await CaseModel.find({
+      status: 'UnderAssessment',
+      updatedAt: { $lt: fortyEightHoursAgo }
+    })
+      .select('case_number status updatedAt assigned_officer_id check_in_id')
+      .populate('assigned_officer_id', 'name')
+      .populate({
+        path: 'check_in_id',
+        populate: { path: 'business_id', select: 'business_name' }
+      })
+      .sort({ updatedAt: 1 }) // Oldest first
+      .limit(10);
+
+    res.json({
+      overdue_comebacks: overdueComebacks,
+      stale_assessments: staleAssessments
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get cases for supervisor's officers
 router.get('/my-team', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
   try {

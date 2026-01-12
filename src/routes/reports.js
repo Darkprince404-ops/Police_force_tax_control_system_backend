@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
 import { CaseModel, BusinessModel, CheckInModel, EvidenceModel, ReportScheduleModel } from '../models/index.js';
 import { generateExcelReport, generatePDFReport } from '../services/reportExportService.js';
+import { recordAudit } from '../services/auditService.js';
 
 const router = Router();
 const activeSchedules = new Map();
@@ -162,6 +163,93 @@ router.get(
         resolutionRate: Math.round(resolutionRate * 100) / 100,
         totalCases,
         resolvedCases: strictResolved,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// V2 Dashboard Stats (Optimized)
+router.get(
+  '/dashboard-stats-v2',
+  requireAuth,
+  requireRole(['supervisor', 'admin']),
+  async (req, res, next) => {
+    try {
+      const today = new Date();
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(today.getDate() - 30);
+      thirtyDaysAgo.setHours(0, 0, 0, 0);
+
+      // 1. Total Cases (Last 30 Days)
+      const totalCases = await CaseModel.countDocuments({
+        createdAt: { $gte: thirtyDaysAgo }
+      });
+
+      // 2. Resolution Rate (Cohort: Created in last 30d AND Resolved)
+      const resolvedCohort = await CaseModel.countDocuments({
+        createdAt: { $gte: thirtyDaysAgo },
+        status: { $in: ['Resolved', 'Closed', 'Fined', 'NotGuilty', 'Guilty'] }
+      });
+      const resolutionRate = totalCases > 0 ? (resolvedCohort / totalCases) * 100 : 0;
+
+      // 3. Pending Backlog (Snapshot)
+      const pendingBacklog = await CaseModel.countDocuments({
+        status: { $in: ['Open', 'UnderAssessment', 'PendingComeback'] }
+      });
+
+      // 4. Overdue Comebacks (Snapshot)
+      const overdueComebacks = await CaseModel.countDocuments({
+        status: 'PendingComeback',
+        comeback_date: { $lt: today }
+      });
+
+      // 5. Trends (Last 30 Days)
+      const trends = await CaseModel.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: thirtyDaysAgo }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            created: { $sum: 1 },
+            resolved: {
+              $sum: {
+                $cond: [{ $in: ['$status', ['Resolved', 'Closed', 'Fined', 'NotGuilty', 'Guilty']] }, 1, 0]
+              }
+            }
+          }
+        },
+        { $sort: { _id: 1 } },
+        {
+          $project: {
+            date: '$_id',
+            created: 1,
+            resolved: 1,
+            _id: 0
+          }
+        }
+      ]);
+
+      // Fill in missing dates for Recharts
+      const filledTrends = [];
+      for (let d = new Date(thirtyDaysAgo); d <= today; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().split('T')[0];
+        const found = trends.find(t => t.date === dateStr);
+        filledTrends.push(found || { date: dateStr, created: 0, resolved: 0 });
+      }
+
+      res.json({
+        metrics: {
+          total_cases: totalCases,
+          resolution_rate: Math.round(resolutionRate * 10) / 10,
+          pending_backlog: pendingBacklog,
+          overdue_comebacks: overdueComebacks
+        },
+        trends: filledTrends
       });
     } catch (err) {
       next(err);
@@ -661,6 +749,15 @@ router.post(
         filters,
       });
       scheduleJob(schedule);
+
+      await recordAudit({
+        action: 'create_schedule',
+        entity: 'report_schedule',
+        entityId: schedule.id,
+        userId: req.user?.sub,
+        details: { report_type, email, cron: cronExp },
+      });
+
       res.status(201).json(schedule);
     } catch (err) {
       next(err);

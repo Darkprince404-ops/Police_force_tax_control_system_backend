@@ -35,5 +35,9 @@ const caseSchema = new Schema(
 );
 
 caseSchema.index({ case_type: 1, status: 1, case_number: 1 });
+caseSchema.index({ status: 1, createdAt: -1 }); // Needs Attention & Recent Activity
+caseSchema.index({ assigned_officer_id: 1, status: 1 }); // My Team
+caseSchema.index({ status: 1, comeback_date: 1 }); // Overdue Comebacks (note: order matters, equality first often better, but range usage varies. Status is equality, comeback_date is range)
+
 
 export const CaseModel = model('Case', caseSchema);
