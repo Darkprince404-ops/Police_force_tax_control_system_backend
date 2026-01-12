@@ -30,9 +30,9 @@ const caseSchema = new Schema(
     comeback_notification_sent: { type: Boolean, default: false }, // Track if notification was sent
     fine_amount: { type: Number, default: 0 }, // Fine amount if found guilty
     resolution_papers: [resolutionPaperSchema],
-    resolvedAt: { type: Date, index: true }, // Timestamp when case was resolved
-    lastActivityAt: { type: Date, index: true }, // Timestamp of last activity/update
-    statusChangedAt: { type: Date, index: true }, // Timestamp when status last changed
+    resolvedAt: { type: Date }, // Timestamp when case was resolved
+    lastActivityAt: { type: Date }, // Timestamp of last activity/update (indexed below)
+    statusChangedAt: { type: Date }, // Timestamp when status last changed (indexed below)
     payment_status: { 
       type: String, 
       enum: ['unpaid', 'pending_verification', 'paid', 'not_applicable'], 
