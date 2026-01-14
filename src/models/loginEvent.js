@@ -13,6 +13,11 @@ const loginEventSchema = new mongoose.Schema(
       enum: ['gps', 'ip'],
       required: true,
     },
+    geo_method: {
+      type: String,
+      enum: ['gps', 'ip', 'none'],
+      default: 'ip',
+    },
     latitude: {
       type: Number,
       required: function() {

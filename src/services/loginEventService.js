@@ -12,6 +12,7 @@ export async function recordLoginEvent(userId, locationData, req) {
     let eventData = {
       userId,
       method: locationData.method || 'ip',
+      geo_method: locationData.geo_method || locationData.method || 'ip',
       ipAddress,
       userAgent,
       timestamp: new Date(),

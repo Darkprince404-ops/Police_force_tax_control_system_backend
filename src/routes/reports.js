@@ -248,6 +248,8 @@ router.get(
         trends: filledTrends
       });
     } catch (err) {
+      console.error('[dashboard-stats-v2] Error:', err);
+      console.error('[dashboard-stats-v2] Error stack:', err.stack);
       next(err);
     }
   },

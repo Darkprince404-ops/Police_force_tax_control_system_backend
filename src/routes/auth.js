@@ -44,6 +44,7 @@ router.post('/refresh', async (req, res, next) => {
 
 const loginEventSchema = Joi.object({
   method: Joi.string().valid('gps', 'ip').required(),
+  geo_method: Joi.string().valid('gps', 'ip', 'none').optional(),
   latitude: Joi.number().when('method', {
     is: 'gps',
     then: Joi.required(),

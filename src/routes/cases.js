@@ -120,36 +120,92 @@ router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin'])
       getOverdueComebacks 
     } = await import('../services/dashboardMetricsService.js');
     
-    // Get counts for tabs
-    const overdueCount = await getOverdueComebacks();
+    // Get counts for tabs with error handling
+    let overdueCount = 0;
+    let staleCount = 0;
+    let overdueComebacks = [];
+    let staleAssessments = [];
     
-    // Get stale assessments count (same logic as getAgingAssessments)
-    const threshold = new Date();
-    threshold.setHours(threshold.getHours() - 48);
-    const staleCount = await CaseModel.countDocuments({
-      status: 'UnderAssessment',
-      $or: [
-        { lastActivityAt: { $lt: threshold } },
-        { lastActivityAt: { $exists: false }, updatedAt: { $lt: threshold } }
-      ]
-    });
+    try {
+      overdueCount = await getOverdueComebacks();
+    } catch (err) {
+      console.error('[needs-attention] Error getting overdue count:', err);
+      // Continue with 0
+    }
     
-    // 1. Overdue Comebacks: PendingComeback && comeback_date < today
-    const overdueComebacks = await getOverdueComebacksList(10);
+    try {
+      // Get stale assessments count (same logic as getAgingAssessments)
+      const threshold = new Date();
+      threshold.setHours(threshold.getHours() - 48);
+      staleCount = await CaseModel.countDocuments({
+        status: 'UnderAssessment',
+        $or: [
+          { lastActivityAt: { $exists: true, $ne: null, $lt: threshold } },
+          { 
+            $and: [
+              { lastActivityAt: { $exists: false } },
+              { updatedAt: { $exists: true, $ne: null, $lt: threshold } }
+            ]
+          }
+        ]
+      });
+    } catch (err) {
+      console.error('[needs-attention] Error getting stale count:', err);
+      // Continue with 0
+    }
+    
+    try {
+      // 1. Overdue Comebacks: PendingComeback && comeback_date < today
+      overdueComebacks = await getOverdueComebacksList(10);
+      if (!Array.isArray(overdueComebacks)) {
+        console.warn('[needs-attention] getOverdueComebacksList returned non-array:', overdueComebacks);
+        overdueComebacks = [];
+      }
+    } catch (err) {
+      console.error('[needs-attention] Error getting overdue comebacks list:', err);
+      overdueComebacks = [];
+    }
 
-    // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
-    const staleAssessments = await getAgingAssessments(48, 10);
+    try {
+      // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
+      staleAssessments = await getAgingAssessments(48, 10);
+      if (!Array.isArray(staleAssessments)) {
+        console.warn('[needs-attention] getAgingAssessments returned non-array:', staleAssessments);
+        staleAssessments = [];
+      }
+    } catch (err) {
+      console.error('[needs-attention] Error getting stale assessments:', err);
+      staleAssessments = [];
+    }
 
+    // Always return a valid response structure, even on partial failures
     res.json({
-      overdue_comebacks: overdueComebacks,
-      stale_assessments: staleAssessments,
+      overdue_comebacks: overdueComebacks || [],
+      stale_assessments: staleAssessments || [],
       counts: {
-        overdue_comebacks: overdueCount,
-        stale_assessments: staleCount
+        overdue_comebacks: overdueCount || 0,
+        stale_assessments: staleCount || 0
       }
     });
   } catch (err) {
-    next(err);
+    // Log the full error for debugging
+    console.error('[needs-attention] Unexpected error:', err);
+    console.error('[needs-attention] Error stack:', err.stack);
+    console.error('[needs-attention] Error details:', {
+      message: err.message,
+      name: err.name,
+      code: err.code
+    });
+    
+    // Return safe empty response instead of throwing
+    res.json({
+      overdue_comebacks: [],
+      stale_assessments: [],
+      counts: {
+        overdue_comebacks: 0,
+        stale_assessments: 0
+      }
+    });
   }
 });
 
