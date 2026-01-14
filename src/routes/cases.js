@@ -113,12 +113,22 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
 
 // Get needs-attention items (Overdue Comebacks & Stale Assessments)
 router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:115',message:'needs-attention route hit',data:{path:req.path,method:req.method,hasAuth:!!req.user,userRole:req.user?.role},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  console.log('[DEBUG] needs-attention route hit', { path: req.path, method: req.method, hasAuth: !!req.user, userRole: req.user?.role, url: req.url });
+  // #endregion
   try {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:118',message:'importing dashboardMetricsService',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     const { 
       getOverdueComebacksList, 
       getAgingAssessments,
       getOverdueComebacks 
     } = await import('../services/dashboardMetricsService.js');
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:124',message:'import successful',data:{hasGetOverdueComebacksList:!!getOverdueComebacksList,hasGetAgingAssessments:!!getAgingAssessments,hasGetOverdueComebacks:!!getOverdueComebacks},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     
     // Get counts for tabs with error handling
     let overdueCount = 0;
@@ -127,8 +137,17 @@ router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin'])
     let staleAssessments = [];
     
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:129',message:'calling getOverdueComebacks',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
       overdueCount = await getOverdueComebacks();
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:131',message:'getOverdueComebacks result',data:{overdueCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
     } catch (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:133',message:'getOverdueComebacks error',data:{errorMsg:err.message,errorStack:err.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
       console.error('[needs-attention] Error getting overdue count:', err);
       // Continue with 0
     }
@@ -155,13 +174,22 @@ router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin'])
     }
     
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:145',message:'calling getOverdueComebacksList',data:{limit:10},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
       // 1. Overdue Comebacks: PendingComeback && comeback_date < today
       overdueComebacks = await getOverdueComebacksList(10);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:148',message:'getOverdueComebacksList result',data:{isArray:Array.isArray(overdueComebacks),length:overdueComebacks?.length,firstItem:overdueComebacks?.[0]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
       if (!Array.isArray(overdueComebacks)) {
         console.warn('[needs-attention] getOverdueComebacksList returned non-array:', overdueComebacks);
         overdueComebacks = [];
       }
     } catch (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:152',message:'getOverdueComebacksList error',data:{errorMsg:err.message,errorStack:err.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
       console.error('[needs-attention] Error getting overdue comebacks list:', err);
       overdueComebacks = [];
     }

@@ -46,15 +46,28 @@ router.get('/health', async (_req, res) => {
   }
 });
 
+// #region agent log
+fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/index.js:49',message:'registering auth routes',data:{hasAuthRoutes:!!authRoutes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+// #endregion
 router.use('/auth', authRoutes);
 router.use('/businesses', businessRoutes);
 router.use('/business-types', businessTypeRoutes);
 router.use('/checkins', checkInRoutes);
+// #region agent log
+fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/index.js:53',message:'registering case routes',data:{hasCaseRoutes:!!caseRoutes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+// #endregion
 router.use('/cases', caseRoutes);
 router.use('/cases', evidenceRoutes);
 router.use('/imports', importRoutes);
 router.use('/duplicate-reviews', duplicateReviewRoutes);
+// #region agent log
+fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'routes/index.js:57',message:'registering report routes',data:{hasReportRoutes:!!reportRoutes,reportRoutesType:typeof reportRoutes,reportRoutesKeys:reportRoutes ? Object.keys(reportRoutes) : null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+console.log('[DEBUG] Registering report routes', { hasReportRoutes: !!reportRoutes, type: typeof reportRoutes });
+// #endregion
 router.use('/reports', reportRoutes);
+// #region agent log
+console.log('[DEBUG] Report routes registered, checking route stack', { stack: reportRoutes?.stack?.length || 0 });
+// #endregion
 router.use('/tasks', taskRoutes);
 router.use('/users', userRoutes);
 router.use('/activity', activityRoutes);

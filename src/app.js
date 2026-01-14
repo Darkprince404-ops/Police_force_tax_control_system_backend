@@ -61,7 +61,13 @@ export const createApp = () => {
   app.use(morgan('dev'));
   app.use(httpLogger);
 
+  // #region agent log
+  console.log('[DEBUG] Registering routes at /api');
+  // #endregion
   app.use('/api', routes);
+  // #region agent log
+  console.log('[DEBUG] Routes registered, adding 404 handler');
+  // #endregion
   // Serve uploaded files with CORS headers
   app.use(
     '/uploads',
@@ -74,14 +80,30 @@ export const createApp = () => {
   );
 
   app.use((req, res) => {
-    res.status(404).json({ message: 'Not Found' });
+    // #region agent log
+    console.log('[DEBUG] 404 handler hit', { method: req.method, url: req.url, path: req.path, originalUrl: req.originalUrl });
+    // #endregion
+    res.status(404).json({ message: 'Not Found', path: req.path, method: req.method });
   });
 
   app.use((err, req, res, next) => {
     const status = err.status || 500;
+    // #region agent log
+    console.error('[ERROR HANDLER]', {
+      status,
+      message: err.message,
+      stack: err.stack,
+      path: req.path,
+      method: req.method,
+      url: req.url,
+      name: err.name,
+      code: err.code
+    });
+    // #endregion
     res.status(status).json({
       message: err.message || 'Internal Server Error',
       status,
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
     });
   });
 

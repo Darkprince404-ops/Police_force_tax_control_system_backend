@@ -62,15 +62,28 @@ const loginEventSchema = Joi.object({
 const loginEventLimiter = authLimiter;
 
 router.post('/login-event', requireAuth, loginEventLimiter, async (req, res, next) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.js:64',message:'login-event route hit',data:{path:req.path,method:req.method,hasAuth:!!req.user},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  console.log('[DEBUG] login-event route hit', { path: req.path, method: req.method, hasAuth: !!req.user, url: req.url });
+  // #endregion
   try {
     const { error, value } = loginEventSchema.validate(req.body);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.js:67',message:'validation result',data:{hasError:!!error,errorMsg:error?.message,bodyKeys:Object.keys(req.body)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (error) throw createError(400, error.message);
     
     const userId = req.user.sub;
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.js:72',message:'calling recordLoginEvent',data:{userId,locationData:value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     await recordLoginEvent(userId, value, req);
     
     res.json({ success: true });
   } catch (err) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.js:76',message:'login-event error',data:{errorMsg:err.message,errorStack:err.stack,status:err.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     next(err);
   }
 });

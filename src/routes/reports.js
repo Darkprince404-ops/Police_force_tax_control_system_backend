@@ -176,14 +176,27 @@ router.get(
   requireAuth,
   requireRole(['supervisor', 'admin']),
   async (req, res, next) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'reports.js:178',message:'dashboard-stats-v2 route hit',data:{path:req.path,method:req.method,hasAuth:!!req.user,userRole:req.user?.role},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    console.log('[DEBUG] dashboard-stats-v2 route hit', { path: req.path, method: req.method, hasAuth: !!req.user, userRole: req.user?.role, url: req.url });
+    // #endregion
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'reports.js:186',message:'dashboard-stats-v2 importing service',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       const today = new Date();
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(today.getDate() - 30);
       thirtyDaysAgo.setHours(0, 0, 0, 0);
 
       // Use unified metrics service
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'reports.js:192',message:'dashboard-stats-v2 before import',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       const { getDashboardMetrics, getTotalCases, getPendingBacklog, getOverdueComebacks } = await import('../services/dashboardMetricsService.js');
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'reports.js:194',message:'dashboard-stats-v2 after import',data:{hasGetDashboardMetrics:!!getDashboardMetrics,hasGetTotalCases:!!getTotalCases,hasGetPendingBacklog:!!getPendingBacklog,hasGetOverdueComebacks:!!getOverdueComebacks},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
 
       // 1. Total Cases (Last 30 Days) - with date filter
       const totalCases = await getTotalCases({

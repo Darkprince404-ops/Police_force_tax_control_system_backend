@@ -55,10 +55,16 @@ export const getOverdueComebacks = async (filters = {}) => {
  * Hardened against null/undefined fields
  */
 export const getOverdueComebacksList = async (limit = 10) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:57',message:'getOverdueComebacksList entry',data:{limit},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:63',message:'querying cases',data:{today:today.toISOString(),hasCaseModel:!!CaseModel},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     // Only query cases with valid comeback_date (not null/undefined)
     const cases = await CaseModel.find({
       status: 'PendingComeback',
@@ -84,9 +90,19 @@ export const getOverdueComebacksList = async (limit = 10) => {
       .limit(limit)
       .lean();
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:76',message:'query result before filter',data:{casesCount:cases?.length,firstCase:cases?.[0]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     // Filter out cases where populate failed (null references)
-    return cases.filter(c => c && c.comeback_date);
+    const filtered = cases.filter(c => c && c.comeback_date);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:79',message:'getOverdueComebacksList exit',data:{filteredCount:filtered.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    return filtered;
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:82',message:'getOverdueComebacksList error',data:{errorMsg:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     console.error('[getOverdueComebacksList] Error:', error);
     return []; // Return empty array on error
   }
