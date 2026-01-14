@@ -114,7 +114,25 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
 // Get needs-attention items (Overdue Comebacks & Stale Assessments)
 router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
   try {
-    const { getOverdueComebacksList, getAgingAssessments } = await import('../services/dashboardMetricsService.js');
+    const { 
+      getOverdueComebacksList, 
+      getAgingAssessments,
+      getOverdueComebacks 
+    } = await import('../services/dashboardMetricsService.js');
+    
+    // Get counts for tabs
+    const overdueCount = await getOverdueComebacks();
+    
+    // Get stale assessments count (same logic as getAgingAssessments)
+    const threshold = new Date();
+    threshold.setHours(threshold.getHours() - 48);
+    const staleCount = await CaseModel.countDocuments({
+      status: 'UnderAssessment',
+      $or: [
+        { lastActivityAt: { $lt: threshold } },
+        { lastActivityAt: { $exists: false }, updatedAt: { $lt: threshold } }
+      ]
+    });
     
     // 1. Overdue Comebacks: PendingComeback && comeback_date < today
     const overdueComebacks = await getOverdueComebacksList(10);
@@ -124,7 +142,11 @@ router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin'])
 
     res.json({
       overdue_comebacks: overdueComebacks,
-      stale_assessments: staleAssessments
+      stale_assessments: staleAssessments,
+      counts: {
+        overdue_comebacks: overdueCount,
+        stale_assessments: staleCount
+      }
     });
   } catch (err) {
     next(err);
