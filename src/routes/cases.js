@@ -113,21 +113,127 @@ router.put('/:id', requireAuth, requireRole(['supervisor', 'admin']), async (req
 
 // Get needs-attention items (Overdue Comebacks & Stale Assessments)
 router.get('/needs-attention', requireAuth, requireRole(['supervisor', 'admin']), async (req, res, next) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:115',message:'needs-attention route hit',data:{path:req.path,method:req.method,hasAuth:!!req.user,userRole:req.user?.role},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  console.log('[DEBUG] needs-attention route hit', { path: req.path, method: req.method, hasAuth: !!req.user, userRole: req.user?.role, url: req.url });
+  // #endregion
   try {
-    const { getOverdueComebacksList, getAgingAssessments } = await import('../services/dashboardMetricsService.js');
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:118',message:'importing dashboardMetricsService',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    const { 
+      getOverdueComebacksList, 
+      getAgingAssessments,
+      getOverdueComebacks 
+    } = await import('../services/dashboardMetricsService.js');
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:124',message:'import successful',data:{hasGetOverdueComebacksList:!!getOverdueComebacksList,hasGetAgingAssessments:!!getAgingAssessments,hasGetOverdueComebacks:!!getOverdueComebacks},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     
-    // 1. Overdue Comebacks: PendingComeback && comeback_date < today
-    const overdueComebacks = await getOverdueComebacksList(10);
+    // Get counts for tabs with error handling
+    let overdueCount = 0;
+    let staleCount = 0;
+    let overdueComebacks = [];
+    let staleAssessments = [];
+    
+    try {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:129',message:'calling getOverdueComebacks',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      overdueCount = await getOverdueComebacks();
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:131',message:'getOverdueComebacks result',data:{overdueCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+    } catch (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:133',message:'getOverdueComebacks error',data:{errorMsg:err.message,errorStack:err.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      console.error('[needs-attention] Error getting overdue count:', err);
+      // Continue with 0
+    }
+    
+    try {
+      // Get stale assessments count (same logic as getAgingAssessments)
+      const threshold = new Date();
+      threshold.setHours(threshold.getHours() - 48);
+      staleCount = await CaseModel.countDocuments({
+        status: 'UnderAssessment',
+        $or: [
+          { lastActivityAt: { $exists: true, $ne: null, $lt: threshold } },
+          { 
+            $and: [
+              { lastActivityAt: { $exists: false } },
+              { updatedAt: { $exists: true, $ne: null, $lt: threshold } }
+            ]
+          }
+        ]
+      });
+    } catch (err) {
+      console.error('[needs-attention] Error getting stale count:', err);
+      // Continue with 0
+    }
+    
+    try {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:145',message:'calling getOverdueComebacksList',data:{limit:10},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      // 1. Overdue Comebacks: PendingComeback && comeback_date < today
+      overdueComebacks = await getOverdueComebacksList(10);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:148',message:'getOverdueComebacksList result',data:{isArray:Array.isArray(overdueComebacks),length:overdueComebacks?.length,firstItem:overdueComebacks?.[0]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      if (!Array.isArray(overdueComebacks)) {
+        console.warn('[needs-attention] getOverdueComebacksList returned non-array:', overdueComebacks);
+        overdueComebacks = [];
+      }
+    } catch (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cases.js:152',message:'getOverdueComebacksList error',data:{errorMsg:err.message,errorStack:err.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      console.error('[needs-attention] Error getting overdue comebacks list:', err);
+      overdueComebacks = [];
+    }
 
-    // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
-    const staleAssessments = await getAgingAssessments(48, 10);
+    try {
+      // 2. Aging Assessments: UnderAssessment && lastActivityAt > 48h ago
+      staleAssessments = await getAgingAssessments(48, 10);
+      if (!Array.isArray(staleAssessments)) {
+        console.warn('[needs-attention] getAgingAssessments returned non-array:', staleAssessments);
+        staleAssessments = [];
+      }
+    } catch (err) {
+      console.error('[needs-attention] Error getting stale assessments:', err);
+      staleAssessments = [];
+    }
 
+    // Always return a valid response structure, even on partial failures
     res.json({
-      overdue_comebacks: overdueComebacks,
-      stale_assessments: staleAssessments
+      overdue_comebacks: overdueComebacks || [],
+      stale_assessments: staleAssessments || [],
+      counts: {
+        overdue_comebacks: overdueCount || 0,
+        stale_assessments: staleCount || 0
+      }
     });
   } catch (err) {
-    next(err);
+    // Log the full error for debugging
+    console.error('[needs-attention] Unexpected error:', err);
+    console.error('[needs-attention] Error stack:', err.stack);
+    console.error('[needs-attention] Error details:', {
+      message: err.message,
+      name: err.name,
+      code: err.code
+    });
+    
+    // Return safe empty response instead of throwing
+    res.json({
+      overdue_comebacks: [],
+      stale_assessments: [],
+      counts: {
+        overdue_comebacks: 0,
+        stale_assessments: 0
+      }
+    });
   }
 });
 

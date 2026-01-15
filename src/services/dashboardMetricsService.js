@@ -32,64 +32,133 @@ export const getResolvedCount = async (filters = {}) => {
 /**
  * Get overdue comebacks count
  * Definition: Cases with status PendingComeback and comeback_date < today
+ * Hardened against null/undefined fields
  */
 export const getOverdueComebacks = async (filters = {}) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  return await CaseModel.countDocuments({
-    ...filters,
-    status: 'PendingComeback',
-    comeback_date: { $lt: today }
-  });
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    return await CaseModel.countDocuments({
+      ...filters,
+      status: 'PendingComeback',
+      comeback_date: { $exists: true, $ne: null, $lt: today }
+    });
+  } catch (error) {
+    console.error('[getOverdueComebacks] Error:', error);
+    return 0; // Return 0 on error
+  }
 };
 
 /**
  * Get overdue comebacks list (for needs-attention)
+ * Hardened against null/undefined fields
  */
 export const getOverdueComebacksList = async (limit = 10) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  return await CaseModel.find({
-    status: 'PendingComeback',
-    comeback_date: { $lt: today }
-  })
-    .select('case_number status comeback_date assigned_officer_id check_in_id')
-    .populate('assigned_officer_id', 'name')
-    .populate({
-      path: 'check_in_id',
-      populate: { path: 'business_id', select: 'business_name' }
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:57',message:'getOverdueComebacksList entry',data:{limit},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:63',message:'querying cases',data:{today:today.toISOString(),hasCaseModel:!!CaseModel},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    // Only query cases with valid comeback_date (not null/undefined)
+    const cases = await CaseModel.find({
+      status: 'PendingComeback',
+      comeback_date: { $exists: true, $ne: null, $lt: today }
     })
-    .sort({ comeback_date: 1 })
-    .limit(limit)
-    .lean();
+      .select('case_number status comeback_date assigned_officer_id check_in_id')
+      .populate({
+        path: 'assigned_officer_id',
+        select: 'name',
+        match: { _id: { $exists: true } } // Only populate if exists
+      })
+      .populate({
+        path: 'check_in_id',
+        select: 'business_id',
+        populate: {
+          path: 'business_id',
+          select: 'business_name',
+          match: { _id: { $exists: true } } // Only populate if exists
+        },
+        match: { _id: { $exists: true } } // Only populate if exists
+      })
+      .sort({ comeback_date: 1 })
+      .limit(limit)
+      .lean();
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:76',message:'query result before filter',data:{casesCount:cases?.length,firstCase:cases?.[0]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    // Filter out cases where populate failed (null references)
+    const filtered = cases.filter(c => c && c.comeback_date);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:79',message:'getOverdueComebacksList exit',data:{filteredCount:filtered.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    return filtered;
+  } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5e1cf7b1-92f8-4f5a-9393-0603b1176d2e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboardMetricsService.js:82',message:'getOverdueComebacksList error',data:{errorMsg:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    console.error('[getOverdueComebacksList] Error:', error);
+    return []; // Return empty array on error
+  }
 };
 
 /**
  * Get aging/stale assessments
  * Definition: Cases with status UnderAssessment and lastActivityAt > 48 hours ago
+ * Hardened against null/undefined fields
  */
 export const getAgingAssessments = async (hoursThreshold = 48, limit = 10) => {
-  const threshold = new Date();
-  threshold.setHours(threshold.getHours() - hoursThreshold);
-  
-  return await CaseModel.find({
-    status: 'UnderAssessment',
-    $or: [
-      { lastActivityAt: { $lt: threshold } },
-      { lastActivityAt: { $exists: false }, updatedAt: { $lt: threshold } } // Fallback for old cases
-    ]
-  })
-    .select('case_number status lastActivityAt updatedAt assigned_officer_id check_in_id')
-    .populate('assigned_officer_id', 'name')
-    .populate({
-      path: 'check_in_id',
-      populate: { path: 'business_id', select: 'business_name' }
-    })
-    .sort({ lastActivityAt: 1, updatedAt: 1 }) // Oldest first
-    .limit(limit)
-    .lean();
+  try {
+    const threshold = new Date();
+    threshold.setHours(threshold.getHours() - hoursThreshold);
+    
+    // Build query with proper null handling
+    const query = {
+      status: 'UnderAssessment',
+      $or: [
+        { lastActivityAt: { $exists: true, $ne: null, $lt: threshold } },
+        { 
+          $and: [
+            { lastActivityAt: { $exists: false } },
+            { updatedAt: { $exists: true, $ne: null, $lt: threshold } }
+          ]
+        }
+      ]
+    };
+    
+    const cases = await CaseModel.find(query)
+      .select('case_number status lastActivityAt updatedAt assigned_officer_id check_in_id')
+      .populate({
+        path: 'assigned_officer_id',
+        select: 'name',
+        match: { _id: { $exists: true } } // Only populate if exists
+      })
+      .populate({
+        path: 'check_in_id',
+        select: 'business_id',
+        populate: {
+          path: 'business_id',
+          select: 'business_name',
+          match: { _id: { $exists: true } } // Only populate if exists
+        },
+        match: { _id: { $exists: true } } // Only populate if exists
+      })
+      .sort({ lastActivityAt: 1, updatedAt: 1 }) // Oldest first
+      .limit(limit)
+      .lean();
+    
+    // Filter out cases where populate failed (null references)
+    return cases.filter(c => c && (c.lastActivityAt || c.updatedAt));
+  } catch (error) {
+    console.error('[getAgingAssessments] Error:', error);
+    return []; // Return empty array on error
+  }
 };
 
 /**

@@ -12,4 +12,5 @@ export * from './notification.js';
 export * from './reportSchedule.js';
 export * from './editRequest.js';
 export * from './payment.js';
+export * from './loginEvent.js';
 

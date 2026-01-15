@@ -17,7 +17,7 @@ const normalizeHeader = (header) => String(header || '').trim().toLowerCase().re
 // Header variations mapping - all variations map to field names
 const headerVariations = {
   owner_name: [
-    'magaca shaqsiga', 'magaca shaqoiga', 'magaca shaqsiga', 
+    'magaca shaqsiga', 'magaca shaqoiga', 
     'name of incharge', 'name of owner', 'the name of the incharge or the owner',
     'owner name', 'owner', 'incharge', 'name of the owner', 'name of the incharge'
   ],
@@ -28,7 +28,8 @@ const headerVariations = {
     'xiiska', 'tax id', 'tax_id', 'tax number', 'tin'
   ],
   fined_amount: [
-    'account', 'account ka', 'accoun-ka', 'account-ka', 'fine', 'fined amount', 'fined_amount', 'amount', 'penalty'
+    'account', 'account ka', 'accoun-ka', 'account-ka', 'fine', 'fined amount', 'fined_amount', 'amount', 'penalty',
+    'fine amount and set to come back date', 'fine amount and set to come back', 'fine and comeback date'
   ],
   contact_phone: [
     'number', 'their number', 'phone', 'contact number', 'contact_phone', 'telephone', 'mobile', 'phone number'
@@ -208,6 +209,13 @@ export const parsePreview = (filePath) => {
     // Auto-detect mapping
     const autoMapping = autoDetectMapping(headers);
     
+    // Find the fine amount column header
+    const fineColumnHeader = autoMapping.fined_amount || headers.find(h => {
+      const normalized = normalizeHeader(h);
+      return normalized.includes('fine') || normalized.includes('account') || 
+             normalized.includes('amount') || normalized.includes('comeback');
+    });
+    
     // Get all rows for preview (not just first 20)
     const allRows = rows.slice(1)
       .filter(row => row && Array.isArray(row))
@@ -216,6 +224,23 @@ export const parsePreview = (filePath) => {
         headers.forEach((h, idx) => {
           obj[h] = row[idx] ?? '';
         });
+        
+        // Parse fine cell if fine column exists
+        if (fineColumnHeader && obj[fineColumnHeader] !== undefined) {
+          const fineData = parseFineCell(obj[fineColumnHeader]);
+          obj.fine_status = fineData.fine_status;
+          obj.paid_amount = fineData.paid_amount;
+          obj.comeback_date = fineData.comeback_date;
+          obj.needs_review = fineData.needs_review;
+          obj.fine_raw = fineData.fine_raw;
+        } else {
+          obj.fine_status = 'empty';
+          obj.paid_amount = null;
+          obj.comeback_date = null;
+          obj.needs_review = false;
+          obj.fine_raw = null;
+        }
+        
         return obj;
       })
       .filter(row => {
@@ -226,9 +251,29 @@ export const parsePreview = (filePath) => {
         });
       });
     
+    // Also parse fine cells in sample rows
+    const sampleRowsWithFine = dataRows.map((row) => {
+      const rowCopy = { ...row };
+      if (fineColumnHeader && rowCopy[fineColumnHeader] !== undefined) {
+        const fineData = parseFineCell(rowCopy[fineColumnHeader]);
+        rowCopy.fine_status = fineData.fine_status;
+        rowCopy.paid_amount = fineData.paid_amount;
+        rowCopy.comeback_date = fineData.comeback_date;
+        rowCopy.needs_review = fineData.needs_review;
+        rowCopy.fine_raw = fineData.fine_raw;
+      } else {
+        rowCopy.fine_status = 'empty';
+        rowCopy.paid_amount = null;
+        rowCopy.comeback_date = null;
+        rowCopy.needs_review = false;
+        rowCopy.fine_raw = null;
+      }
+      return rowCopy;
+    });
+    
     return { 
       headers, 
-      sampleRows: dataRows,
+      sampleRows: sampleRowsWithFine,
       allRows: allRows.slice(0, 50), // First 50 rows for preview
       autoMapping,
       totalRows: allRows.length,
@@ -309,7 +354,96 @@ const parseDate = (dateValue) => {
     return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
   }
   
+  // Try DD-MMM-YY format (e.g., 07-Jan-26)
+  const ddmmyy = dateStr.match(/^(\d{1,2})[\-\/](\w{3})[\-\/](\d{2})$/i);
+  if (ddmmyy) {
+    const [, day, monthStr, yearStr] = ddmmyy;
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const monthIndex = monthNames.findIndex(m => m === monthStr.toLowerCase());
+    if (monthIndex >= 0) {
+      const year = 2000 + parseInt(yearStr);
+      return new Date(year, monthIndex, parseInt(day));
+    }
+  }
+  
   return null;
+};
+
+// Parse combined fine amount and comeback date cell
+// Handles patterns like: "82$ paid", "150 paid", "comeback 07-Jan-26", "comeback n 07-Jan-26"
+const parseFineCell = (fineValue) => {
+  const result = {
+    fine_status: 'empty',
+    paid_amount: null,
+    comeback_date: null,
+    needs_review: false,
+    fine_raw: null,
+  };
+
+  if (!fineValue) {
+    return result;
+  }
+
+  const fineStr = String(fineValue).trim();
+  if (!fineStr) {
+    return result;
+  }
+
+  result.fine_raw = fineStr;
+
+  try {
+    const lowerStr = fineStr.toLowerCase();
+    
+    // Check for "paid" status
+    const hasPaid = lowerStr.includes('paid');
+    
+    // Extract numeric amount (handles $, commas, etc.)
+    const amountMatch = fineStr.match(/(\d+(?:[.,]\d+)?)/);
+    let paidAmount = null;
+    if (amountMatch) {
+      const amountStr = amountMatch[1].replace(',', '');
+      paidAmount = parseFloat(amountStr);
+      if (!isNaN(paidAmount) && paidAmount > 0) {
+        result.paid_amount = paidAmount;
+      }
+    }
+
+    // Check for comeback date patterns
+    // Patterns: "comeback 07-Jan-26", "comeback n 07-Jan-26", "comeback 07/Jan/26", etc.
+    const comebackMatch = fineStr.match(/comeback\s*n?\s*[\-:\s]*(\d{1,2}[\-\/]\w{3}[\-\/]\d{2,4})/i);
+    if (comebackMatch) {
+      const dateStr = comebackMatch[1];
+      const parsedDate = parseDate(dateStr);
+      if (parsedDate) {
+        result.comeback_date = parsedDate;
+        result.fine_status = 'scheduled';
+      }
+    }
+
+    // Determine fine_status
+    if (hasPaid && paidAmount !== null) {
+      result.fine_status = 'paid';
+    } else if (result.comeback_date) {
+      result.fine_status = 'scheduled';
+    } else if (paidAmount !== null) {
+      result.fine_status = 'unpaid';
+    } else if (fineStr && fineStr.trim().length > 0) {
+      // Has content but couldn't parse - needs review
+      result.needs_review = true;
+      result.fine_status = 'empty'; // Keep as empty but flag for review
+    }
+
+    // If we couldn't parse anything meaningful, mark for review
+    if (!hasPaid && !result.comeback_date && paidAmount === null && fineStr.trim().length > 0) {
+      result.needs_review = true;
+    }
+
+  } catch (error) {
+    console.error('Error parsing fine cell:', error, 'Value:', fineStr);
+    result.needs_review = true;
+  }
+
+  return result;
 };
 
 // Process a single row and return result
@@ -436,6 +570,9 @@ const processRow = async (row, headers, mapping, options, userId, summary, impor
   const finedAmountRaw = toObj('fined_amount');
   const caseFieldRaw = toObj('case_field');
   
+  // Parse fine cell to get structured data
+  const fineData = parseFineCell(finedAmountRaw);
+  
   // Parse dates
   const checkInDate = parseDate(checkInDateRaw) || new Date();
   
@@ -443,10 +580,11 @@ const processRow = async (row, headers, mapping, options, userId, summary, impor
   const hasFinedAmount = finedAmountRaw !== undefined && finedAmountRaw !== null && finedAmountRaw !== '';
   const hasCaseField = caseFieldRaw !== undefined && caseFieldRaw !== null && caseFieldRaw !== '';
   const hasCaseDate = caseDateRaw !== undefined && caseDateRaw !== null && caseDateRaw !== '';
+  const hasFineData = fineData.paid_amount !== null || fineData.comeback_date !== null || fineData.fine_status !== 'empty';
   
   let checkInId;
   // Create check-in if we have date, fined amount, or case field
-  if (checkInDateRaw || hasFinedAmount || hasCaseField || hasCaseDate) {
+  if (checkInDateRaw || hasFinedAmount || hasCaseField || hasCaseDate || hasFineData) {
     const checkInData = {
       business_id: businessId,
       officer_id: userId,
@@ -454,8 +592,10 @@ const processRow = async (row, headers, mapping, options, userId, summary, impor
       check_in_date: checkInDate,
     };
     
-    // Parse fined amount - handle string numbers
-    if (hasFinedAmount) {
+    // Use parsed fine amount if available, otherwise fall back to old parsing
+    if (fineData.paid_amount !== null) {
+      checkInData.fine = fineData.paid_amount;
+    } else if (hasFinedAmount) {
       const fineValue = typeof finedAmountRaw === 'string' 
         ? parseFloat(String(finedAmountRaw).replace(/[^0-9.]/g, '')) 
         : parseFloat(finedAmountRaw);
@@ -483,13 +623,35 @@ const processRow = async (row, headers, mapping, options, userId, summary, impor
       assigned_officer_id: userId,
     };
     
-    // Add fine amount to case if available
-    if (hasFinedAmount) {
+    // Use parsed fine data
+    if (fineData.paid_amount !== null) {
+      caseData.fine_amount = fineData.paid_amount;
+    } else if (hasFinedAmount) {
       const fineValue = typeof finedAmountRaw === 'string' 
         ? parseFloat(String(finedAmountRaw).replace(/[^0-9.]/g, '')) 
         : parseFloat(finedAmountRaw);
       if (!isNaN(fineValue) && fineValue > 0) {
         caseData.fine_amount = fineValue;
+      }
+    }
+    
+    // Set payment status based on fine_status
+    if (fineData.fine_status === 'paid') {
+      caseData.payment_status = 'paid';
+      caseData.payment_amount = fineData.paid_amount || 0;
+    } else if (fineData.fine_status === 'scheduled') {
+      caseData.status = 'PendingComeback';
+      caseData.comeback_date = fineData.comeback_date;
+      caseData.payment_status = 'unpaid';
+    } else if (fineData.fine_status === 'unpaid' && fineData.paid_amount !== null) {
+      caseData.payment_status = 'unpaid';
+    }
+    
+    // Set comeback date if available
+    if (fineData.comeback_date) {
+      caseData.comeback_date = fineData.comeback_date;
+      if (caseData.status === 'UnderAssessment') {
+        caseData.status = 'PendingComeback';
       }
     }
     

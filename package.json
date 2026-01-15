@@ -18,6 +18,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
+    "geoip-lite": "^1.4.10",
     "helmet": "^7.0.0",
     "http-errors": "^2.0.0",
     "joi": "^17.12.1",
